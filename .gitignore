@@ -1,0 +1,19 @@
+# env vars
+.env
+*.env
+
+# virtual envs
+.venv/
+venv/
+env/
+
+# cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# ide / os_files
+.vscode/
+.DS_Store
