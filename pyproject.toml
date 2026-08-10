@@ -4,7 +4,10 @@ version = "0.0.0"
 requires-python = ">=3.11, <3.12"
 dependencies = [
     "google-genai", 
-    "dotenv"
+    "dotenv",
+    "pandas",
+    "scikit-learn",
+    "pymupdf"
 ]
 
 [build-system]

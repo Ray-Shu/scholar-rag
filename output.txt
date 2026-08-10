@@ -1,0 +1,3072 @@
+Real-Time Recurrent Learning using
+Trace Units in Reinforcement Learning
+Esraa Elelimy, Adam White∗, Michael Bowling∗, Martha White∗
+University of Alberta, Alberta Machine Intelligence Institute (Amii)
+∗Canada CIFAR AI Chair
+elelimy,amw8,mbowling,whitem@ualberta.ca
+Abstract
+Recurrent Neural Networks (RNNs) are used to learn representations in partially
+observable environments. For agents that learn online and continually interact with
+the environment, it is desirable to train RNNs with real-time recurrent learning
+(RTRL); unfortunately, RTRL is prohibitively expensive for standard RNNs. A
+promising direction is to use linear recurrent architectures (LRUs), where dense
+recurrent weights are replaced with a complex-valued diagonal, making RTRL
+efficient. In this work, we build on these insights to provide a lightweight but
+effective approach for training RNNs in online RL. We introduce Recurrent Trace
+Units (RTUs), a small modification on LRUs that we nonetheless find to have
+significant performance benefits over LRUs when trained with RTRL. We find
+RTUs significantly outperform other recurrent architectures across several partially
+observable environments while using significantly less computation.
+1
+Introduction
+Agents, animals, and people perceive their surrounding environment through imperfect sensory
+observations. When the state of the environment is partially observable, agents must construct and
+maintain their own state from the stream of observations. The constructed agent state summarizes past
+environment-agent interactions in a form that is useful to predict and control future interactions [40].
+Recurrent Neural Networks (RNNs) provide a flexible architecture for constructing agent state
+[18, 20, 12, 5, 9].
+While standard RNN architectures have been mainly supplanted by Transformers [43], in online
+reinforcement learning settings where the agent learns while interacting with the environment, RNNs
+remain a promising direction to pursue [16, 10]. There are two main issues that limit the use of
+self-attention mechanisms from Transformers in online learning. First, calculating the similarity
+between each pair of points results in a computational complexity that is a function of k2, where k
+is the sequence length. Moreover, calculating the similarity between all pairs ignores the temporal
+order of the data points, which limits the usefulness of self-attention when the data is temporally
+correlated [46]. Second, we need access to the whole sequence of observations before taking an
+action or updating the learnable parameters, which is impractical in continual learning. While
+recent works have reduced the complexity of transformers from quadratic in the sequence length
+to linear [14, 15, 36], the full sequence length is still needed to train such architectures. Gated
+Transformer-XL is an attempt to overcome this issue by keeping a moving window of previous
+observations [34]. A window of past observations does not scale well to long sequences—the
+computation is quadratic in the sequence length—and a window is one particular fixed function of
+history. The simpler recursive form in RNNs, on the other hand, can learn a great variety of functions
+of history from the data and is well suited for updating the state online for a sequential data stream
+and have been shown to outperform transformers in such settings [22].
+Preprint. Under review.
+arXiv:2409.01449v1  [cs.LG]  2 Sep 2024
+A key open question is how to efficiently train RNNs in online RL. We can divide the literature
+into methods that approximate Real-Time Recurrent Learning (RTRL) and those that restrict the
+recurrent architecture. RTRL [45] exploits the recursive nature of the gradient for RNNs, carrying
+forward the needed gradient information instead of unrolling the recurrent dynamics back in time like
+Truncated Backpropagation Through Time (T-BPTT) [44]. RTRL avoids storing past data but is so
+computationally expensive as to be intractable for even moderately sized networks. Several methods
+approximate the RTRL gradient update, including NoBackTrack [32], Unbiased Online Recurrent
+Optimization [42, 4], Sparse N-Step Approximation (SnAp) [27]. All of these methods produce a
+biased gradient estimate. Other works have tried to approximate an unbiased gradient estimate of
+BPTT specifically for the case of policy gradient updates in RL. However, the approximation resulted
+in a high variance due to added stochasticity to the policy [1].
+Methods in the second category usually restrict the RNN architecture to a diagonal RNN [8, 29],
+including Columnar Networks [17], the element-wise LSTM [16], and Independently Recurrent
+Neural Networks (IndRNNs) [19]. The RTRL algorithm is computationally efficient for such
+architectures. However, this approach sacrifices representation power and can perform poorly [17].
+Recent work suggests overcoming the poor performance of diagonal RNNs with a small modification:
+having a complex-valued recurrent state instead of restricting it to real values [33]. In fact, as we
+will show in section 3.1, there exists an equivalence between using a dense linear recurrent layer
+and a diagonal recurrent layer with complex values, indicating no loss of representational capacity.
+LRUs have been combined with RTRL [47], though only empirically explored for supervised learning
+datasets.
+In this work, we extend the insights from LRUs into the online RL setting. Our primary contribution
+are our experiments showing that such a lightweight recurrent architecture can outperform standard
+approaches like GRUs in RL, with significantly less computation. To obtain this result, we propose
+a small extension on LRUs, which we call Recurrent Trace Units (RTUs). RTUs incorporate
+nonlinearity into the recurrence and use a slightly different parameterization than LRUs, but one
+we find is more amenable to the use of RTRL in online RL than LRUs. We extend Proximal Policy
+Optimization (PPO) [39] to use RTRL, ablating the decision choices we propose. We provide an in-
+depth study in an animal-learning prediction benchmark, showing that RTUs scale better than GRUs
+with increasing compute and number of parameters and that RTUs outperform alternative diagonal
+recurrent architectures trained with RTRL. We then show across numerous control environments that
+RTUs have comparable or better performance, compared to GRUs and LRUs.
+2
+Background
+We formalize the problem setting as a Partially Observable Markov Decision Process (POMDP).
+At each time step t = 0, 1, 2, · · · , the agent perceives an observation xt, a limited view of the state
+st ∈S, and takes an action At ∈A(st). Depending on the action taken, the agent finds itself in a
+new state st+1 ∈S, observes the corresponding observation xt+1 and a reward Rt+1 ∈R. In the
+online control setting, the agent’s goal is to maximize the sum of received rewards. It may also make
+predictions about its environment, such as future observations’ outcomes.
+For prediction and control in a partially observable environment, the agent should use the stream of
+observations to construct its agent state. The agent state summarizes information from the history
+of the agent-environment interactions that are useful for prediction and control [40]. We could use
+the whole history up to t, namely (x0, A1, R1, x1, A2, R2, . . . xt), as the agent state. Though the
+history preserves all the information, it is not feasible to use directly. We want the agent to have
+constant memory and computation per time step and storing the whole history causes the memory
+and the computation to grow with time. Instead, the agent needs to compress this history into a
+concise representation. We refer to the agent’s internal representation of the history at time t as
+its agent state or its hidden state ht. The agent constructs its current agent state ht ∈Rn from its
+previous agent state ht−1 ∈Rn and the recent observation xt ∈Rd using a state-update function
+g : Rn × Rd →Rn: ht = g(ht−1, xt).
+One way to learn this state-update function g is with a recurrent neural network (RNN). A simple
+form is a linear recurrent layer, where g(ht−1, xt) = Wxxt + Whht−1 for weight matrices Wx
+and Wh. We can also add a nonlinear activation, such as ReLU.
+2
+In general, we will write
+ht = g(ht−1, xt,ψ),
+where ψ are the learnable parameters in the network. The agent maps the agent state ht to an output
+ˆyt and then receives a loss Lt .= L(ˆyt, yt) indicating how far the output is from a target yt. The agent
+updates ψ to minimize this loss over time.
+Two main gradient-based algorithms are widely used to train RNNs: Truncated Backpropagation
+Through Time (TBPTT) and Real-Time Recurrent Learning (RTRL). T-BPTT specifies a truncation
+length T, which controls the number of steps considered when calculating the gradient [44]. As a
+result, the computation and memory complexities of T-BPTT are functions of the truncation length.
+Learning with T-BPTT involves a trade-off between the network’s ability to look further back in time
+and its compute and memory requirements. Picking a large T can be expensive, or require us to limit
+the network size, but picking too small of a T can cause the agent to miss important relationships and
+so result in poor performance.
+Williams and Zipser (1989) introduced the Real-time Recurrent Learning algorithm (RTRL) as a
+learning algorithm for continual recurrent learning. Instead of unrolling the recurrent dynamics back
+in time, RTRL computes the gradient using the most recent observation, and the gradient is calculated
+and carried from the last step [45]. Assuming the network parameters have not changed, this recursive
+form gives the exact gradient and does not suffer from the truncation bias inherent to T-BPTT. We
+provide a more detailed background on the BPTT and RTRL in Appendix B. In reality, the agent
+updates its parameters frequently, so the gradient information saved from previous time steps is stale,
+i.e., calculated w.r.t old parameters; yet, under the assumption of small learning rates, RTRL is known
+to converge [45]. These properties make RTRL ideal for online learning, but unfortunately, there is a
+catch: it is quartic in the size of ht, which can be prohibitively expensive. For this reason, we pursue
+a restricted diagonal form in this work, for which RTRL is efficient and linear in ht.
+3
+Recurrent Trace Units
+In this section, we introduce Recurrent Trace Units (RTUs). We start by revisiting why complex-
+valued diagonals represent dense recurrent layers, and why using real-valued diagonals is insufficient.
+We then introduce the specific form for RTUs that leverages this relationship. We then provide the
+RTRL update for RTUs, highlighting that it is simple to implement and linear in the hidden dimension.
+We finally contrast RTUs to LRUs and motivate why this small extension beyond LRUs is worthwhile.
+3.1
+Revisiting Complex-valued Diagonal Recurrence
+Assume we have the recurrence relationship, with learnable parameters Wh ∈Rn×n and Wx ∈
+Rn×d, ht .= Whht−1 + Wxu(xt), where u can be any transformation of the inputs xt before
+they are inputted into the recurrent layer. We can rewrite the square matrix Wh using an eigenvalue
+decomposition Wh = P Λ P−1, where P contains the n linearly independent eigenvectors and
+Λ ∈Cn×n is a diagonal matrix with the corresponding eigenvalues. Then we have that
+ht = P(Λ P−1 ht−1 + P−1Wx u(xt)) =⇒P−1ht = ΛP−1 ht−1 + P−1 Wx u(xt)
+By defining ht
+.= P−1 ht ∈Cn and Wx
+.=
+P−1Wx ∈Cn×d, we get a new recurrence
+ht = Λht−1 + Wxu(xt).
+We can see ht and ht are representationally equivalent: they are linearly weighted for downstream
+predictions, and so the linear transformation on ht can fold into this downstream linear weighting.
+But it is more computationally efficient to use ht with a diagonal weight matrix Λ, meaning each
+hidden unit only has one recurrent relation instead of n. LRUs precisely leverage this equivalence
+[33]. Specifically, they learn a complex-valued ht, and use Re(W ht) as an input to an MLP for
+downstream nonlinearity.
+Since we did not impose constraints on the matrix Wh, other than being diagonalizable, the eigenval-
+ues of Wh can be complex or real numbers. Previous diagonal RNNs such as eLSTM [16], Columnar
+networks [17], and IndRNN [19] use only real-valued diagonal matrices. Having only real-valued
+diagonals assumes that the matrix Wh is symmetric. We provide a small experiment in Appendix A.3
+3
+showing that this assumption does not hold even in the simplest setting and that complex eigenvalues
+do arise. We also investigate whether this result can be extended beyond linear recurrence, and largely
+obtain a negative theortical result (see Appendix A.1 and A.2 ).
+3.2
+The RTU Parameterization
+A complex number can be represented in three ways: a + bi (the real representation), r exp(iθ) (the
+exponential representation), and r(cos(θ) + i sin(θ)) (the cosine representation). Mathematically,
+these three representations are equivalent, but do they affect learning differently?
+Orvieto et al.
+[33] empirically showed that using the exponential representation resulted in a better-behaved loss
+function than the real representation on a simple task; we provide some discussion in Appendix D.1
+further motivating why the real representation is less stable. We chose instead to pursue the cosine
+representation, because it allows us to represent the complex hidden vector as two real-valued vectors.
+The remainder of this section outlines RTUs, with and without nonlinearity in the recurrence.
+Our goal is to learn a complex-valued diagonal matrix with weights λk = rk(cos(θk) + i sin(θk))
+on the diagonal, for k = 1, . . . , n. Multiplying by a complex number is equivalent to multiplying
+by a 2x2 block matrix with a rescaling. We can use this rotational form to avoid explicitly using
+complex numbers, and instead use two real-values for each complex-valued hidden node. We write
+this real-valued matrix Λ ∈R2n×2n as blocks of rotation matrices1
+Λ =
+"c1
+· · ·
+cn
+#
+where
+ck = rk
+
+cos(θk)
+−sin(θk)
+sin(θk)
+cos(θk)
+
+.
+(1)
+Each element of ht = Λht−1 + Wx xt ∈R2n has two components hc1
+t , hc2
+t , updated recursively
+hc1
+t = r cos(θ) ⊙hc1
+t−1 −r sin(θ) ⊙hc2
+t−1 + Wc1
+x xt,
+hc2
+t = r cos(θ) ⊙hc2
+t−1 + r sin(θ) ⊙hc1
+t−1 + Wc2
+x xt.
+We finally combine the new recurrent states into one state ht .= [f(hc1
+t ); f(hc2
+t )], potentially using a
+non-linearity f after the recurrence.
+We also adopt two parameterization choices made in LRUs that showed improved performance.
+The first is learning logarithmic representations of the parameters rather than learning them directly:
+instead of learning r and θ, the network learns ν log and θlog, where r .= exp(−ν), ν = exp(ν log), and
+θlog .= log(θ). This re-parametrization restricts the r to be ∈(0, 1], required for stability. We found
+these modifications to improve stability of RTUs (see Appendix C). The second parameterization
+choice we adopt from LRUs is to multiply by the input (Wxxt)k with a normalization factor of
+γk = (1 −r2
+k)1/2. Putting this all together, the final formulation of RTUs is
+hc1
+t = g(ν log,θlog) ⊙hc1
+t−1 −ϕ(ν log,θlog) ⊙hc2
+t−1 + γ ⊙Wc1
+x xt.
+hc2
+t = g(ν log,θlog) ⊙hc2
+t−1 + ϕ(ν log,θlog) ⊙hc1
+t−1 + γ ⊙Wc2
+x xt.
+(2)
+ht = [f(hc1
+t ); f(hc2
+t )].
+where γ ∈Rn is the vector composed of γk = (1 −exp(−exp(νlog
+k ))2)1/2 and
+g(νk, θk) .= exp(−exp(νlog
+k )) cos(exp(θlog
+k )),
+ϕ(νk, θk) .= exp(−exp(νlog
+k )) sin(exp(θlog
+k )).
+(3)
+Note that γ can be absorbed by W, and so does not change representation capacity.
+There are two ways to incorporate non-linearity into RTUs: inside the recurrence or after the
+recurrence. In the above, in Equation (2), the non-linearity is after the recurrence. These RTUs
+maintain the equivalence to a dense linear RNN, because the recurrence itself remains linear. We
+refer to this definition of RTUs as Linear RTUs, because the recurrence is linear, even though we
+have the ability to represent nonlinear functions by allowing for any nonlinear activation after the
+1We assume the matrix Λ has only complex eigenvalues, as the network can easily turn a complex eigenvalue
+into a real one by setting the imaginary component to 0.
+4
+recurrence. We also evaluated a different variation of RTUs where the non-linearity is added to the
+recurrence directly. These Nonlinear RTUs are written as
+hc1
+t = f(g(ν log,θlog) ⊙hc1
+t−1 −ϕ(ν log,θlog) ⊙hc2
+t−1 + γ ⊙Wc1
+x xt)
+hc2
+t = f(g(ν log,θlog) ⊙hc2
+t−1 + ϕ(ν log,θlog) ⊙hc1
+t−1 + γ ⊙Wc2
+x xt)
+(4)
+ht = [hc1
+t ; hc2
+t ].
+Notice now f—a nonlinear activation like ReLU—is used in the update to hc1
+t and hc2
+t , and the
+final ht simply stacks these two components. Nonlinear RTUs lose the equivalence to dense RNNs,
+though in our experiments, we find they perform as well or better than Linear RTUs.
+3.3
+The RTRL Update for RTUs
+This section shows the RTRL updates for RTUs with more in-depth derivations in Appendix C. To
+keep notation simpler, we write the updates as if we are directly updating r and θ; the updates for
+ν log and θlog are easily obtained then using the chain rule. The full derivation is in Appendix C.2.
+Consider the partial derivative with respect to r1 for the first RTU with input ¯x1 .= (Wc1
+x xt)1
+hc1
+t,1 = r1 cos(θ1)hc1
+t−1,1 −r1 sin(θ1)hc2
+t−1,1 +
+q
+(1 −r2
+1)¯x1
+Then
+∂Lt
+∂r1
+= ∂Lt
+∂hc1
+t,1
+∂hc1
+t,1
+∂r1
++ ∂Lt
+∂hc2
+t,1
+∂hc2
+t,1
+∂r1
+because r1 only impacts the two units in the first RTU, and derivatives w.r.t. the remaining hidden
+units are zero. Therefore, we just need to keep track of the vector of partial derivatives for these two
+components, er,c1
+t
+.= [
+∂hc1
+t,1
+∂r1 , . . . ,
+∂hc1
+t,n
+∂rn ] and er,c2
+t
+.= [
+∂hc2
+t,1
+∂r1 , . . . ,
+∂hc2
+t,n
+∂rn ] with recursive formulas
+er,c1
+t
+= cos(θ)⊙hc1
+t−1+r⊙cos(θ) ⊙er,c1
+t−1 −sin(θ) ⊙hc2
+t−1 −r ⊙sin(θ) ⊙er,c2
+t−1 −
+r
+√
+1−r2 ⊙Wc1
+x xt
+er,c2
+t
+= cos(θ)⊙hc2
+t−1+r⊙cos(θ) ⊙er,c2
+t−1 + sin(θ) ⊙hc1
+t−1 + r ⊙sin(θ) ⊙er,c1
+t−1 −
+r
+√
+1−r2 ⊙Wc2
+x xt
+We can similarly derive such traces for θ. The update to r involves first computing
+∂Lt
+∂hc1
+t , using
+backpropagation to compute gradients back from the output layer to the hidden layer; this step
+involves no gradients back-in-time. Then r is updated using the gradient ∂Lt
+∂hc1
+t ⊙er,c1
+t
++ ∂Lt
+∂hc2
+t ⊙er,c2
+t
+,
+which is linear in the size of r ∈Rn, as the vectors er,c1
+t
+, er,c2
+t
+∈Rn can be updated with linear
+computation in the above recursion. This update is the RTRL update, with no approximation.
+3.4
+Contrasting to LRUs
+RTUs are similar to LRUs, with two small differences. First, RTUs have real-valued hidden units,
+because the cosine representation is used instead of the exponential representation. Second, RTUs
+use nonlinear activations in the recurrence, making them no longer linear. Though again a minor
+difference, we find that incorporating nonlinearity in the recurrence can be beneficial. RTUs can be
+seen as a small generalization of LRUs, moving away from strict linearity—and thus motivating the
+name change—but nonetheless a generalization we find performs notably better in practice.
+Let us now motivate the utility of moving to a cosine representation and real-valued traces. LRUs
+parameterize each hidden unit with λk = rk exp(iθk) = exp(−exp(νlog
+k )+i exp(θlog
+k )) and directly
+work with complex numbers. Consequently, the hidden layer cannot be directly used to predict real-
+values. It would be biased to take Re(ht) (see Appendix D.2), and instead an additional weight matrix
+W ∈Cn×n must be learned, to get Re(W ht). To understand why this works, assume that we took
+the original ht from the dense NN, and handed it to an MLP. This would involve multiplying Wht
+for some W. If we set W = WP, then W ht = WPP−1ht = Wht and we did not introduce any
+bias. In fact, if W is set this way, we do not need to take the real-valued part, because the output of
+Wht is real-valued. Of course, learning does not force this equivalence—in fact this parameterization
+is more flexible than the original—and so it is necessary to take the real-part.
+RTUs avoid some of these complications by explicitly writing the recurrence and updates with real-
+valued hidden states. Implicitly, the relationship between the two real-valued hidden vectors forces
+5
+them to behave like complex numbers (as rotations), but all equations and learning stay in real-valued
+space. RTUs consequently avoid the need to post multiply by the matrix, removing a small number of
+learnable parameters, allowing the use of a nonlinear activation directly on the output, and allowing
+the hidden state to be immediately passed to a downstream MLP. We acknowledge that others may
+argue that working directly with complex numbers is preferable. The preference for real-valued
+hidden layers may simply be our own limitations, but we suspect much of the reinforcement learning
+community is similarly more comfortable to work in real-valued space. We found small choices in our
+implementation for LRU did not always behave as expected, partially due to how auto-differentiation
+is implemented in packages for complex numbers 2.In the end, our goal is to make these simple
+recurrent traces easy to use, and providing updates with real numbers may remove some barriers.
+4
+Online Prediction Learning
+In this section, we explore different architectural variants of RTUs and LRUs in a online prediction
+task and then move on to study the tradeoffs between computational resources and performance when
+using RTUs with RTRL compared to GRUs and LRUs with T-BPTT.
+4.1
+Ablation Study on Architectural Choices for RTUs and LRUs
+In this first experiment, we investigate the impact of several architectural choices on the performance
+of RTUs and LRUs varying where nonlinearity is applied. We use a simple multi-step prediction task
+called Trace conditioning [38] inspired by experiments in animal learning. The agent’s objective
+is to predict a signal—called the US—conditioned on an earlier signal—-the CS. The prediction
+is formulated as a return, Gt .= P∞
+k=0 γkUSt+k+1, where the agent’s goal is to estimate the value
+function for this return. More details on this environment and experimental settings are in Appendix E.
+Figure 1 summarizes the results.
+Figure 1: Ablation over different architectural choices for RTUs and LRUs. The RTU variants are
+blue, and the LRU variants are orange. In each subplot, we restrict both architectures in a particular
+way, reporting prediction error (MSRE) as a function of hidden state size. Across variations, RTUs
+are often better and, at worst, tie LRU. Here, both architectures were using RTRL.
+4.2
+Learning under resources constraints
+In this section, we investigate the tradeoffs between computational resources and performance when
+using RTUs with RTRL compared to GRUs and LRUs with T-BPTT.
+In the following experiments, all agents consist of a recurrent layer followed by a linear layer
+generating the prediction. We measure performance of the agents online by calculating the Mean
+Square Return Errors (MSRE), which is the mean squared error between the agent’s prediction at
+time t and Gt. In all the experiments, we used the Adam optimizer. We first ran each agent with
+different step sizes for 5 runs and 2 million steps. We then averaged the MSRE over the 2 million
+steps and selected each agent’s best step size value. Finally, we ran the agents with the best step size
+value for 10 runs, which we report here. We also report all agents’ step size sensitivity curves in
+Appendix E.3.
+Learning under computational constraints: We first investigate: how well do different agents
+exploit the available computational resources? We specified a fixed computational budget of 15000
+2Autodiff can give unexpected results when dealing with complex numbers. For example, see the discussion
+https://github.com/google/jax/discussions/6817.
+6
+15
+30
+60
+Truncation Length
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+MSRE
+Learning w. Computational 
+Constraints (15K FLOPS)
+GRU
+Linear RTUs
+Non-Linear RTUs
+LRU
+15k
+30k
+60k
+FLOPs
+(a)
+(b)
+(c)
+(d)
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+Scaling w. Computation 
+Option 1
+GRU
+Linear RTUs
+Non-Linear RTUs
+LRU
+2
+4
+8
+16
+32
+64
+128
+Approximate Compute in FLOPs (×103)
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+Scaling w. Computation 
+Option 2
+GRU, T=45
+Linear RTUs
+Non-Linear RTUs
+LRU, T=45
+2
+4
+8
+16
+32
+64
+128
+Number of Parameters (×103)
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+Scaling w. Parameters
+GRU, T=45
+Linear RTUs
+Non-Linear RTUs
+LRU
+Figure 2: Learning under resources constraints in Trace Conditioning. Each of the four subplots
+shows how each algorithm’s performance varies as a function of resources. (a) LRU and GRU with
+T-TBTT is not competitive with RTUs even as T is increased while restricting the number of hidden
+units in LRU and GRU so that all algorithms use about the same computation per step. (b) If we allow
+GRU and LRU’s computation to increase (fixed network size) while increasing T, the performance
+gap remains. (c) Fixing T to a large value to solve the task, we can increase the number of parameters,
+holding the computation equal for all methods. (d) If we do not require compute to be equal across
+methods as we scale parameters, then the LRU can eventually match the error of RTU, but GRU
+cannot. The black dashed line represents the near perfect prediction performance.
+FLOPs. Since RTUs are learning using RTRL and have a linear computational complexity, the
+computational budget only determines the number of hidden units in the architecture. For GRU
+and LRU, both the truncation length and the hidden dimension contribute to the budget. We tested
+several configurations of truncation lengths and parameters such that the overall computations fit
+the computational budget. Figure 2.a shows the results of this experiment. As we move along the
+horizontal axis, the number of parameters for GRU and LRU decreases as T increases to fit the
+computational constraints. However, the RTU agents do not depend on T, so their performance and
+computation is constant.
+Scaling with computation: The computational complexity of T-BPTT depends on the truncation
+length and the number of parameters in the neural network. Thus, the agent can use the additional
+resources in two ways: (1) Increasing the truncation length, and (2) Increasing the number of
+parameters. On the other hand, RTUs use all the computations to have more parameters.
+Now, we move to our second question: how well do different methods scale with increasing the
+computational budget? We answer this question in two stages: Firstly, we study T-BPTT with
+increasing T and a fixed number of parameters. For RTU, the computation increases by adding
+more parameters such that all corresponding points from GRU and RTU use the same amount of
+computation. Secondly, we fixed the truncation length for GRU to 45, which is more than the
+maximum distance between the CS and the US, and increased the computation by increasing the
+number of parameters for GRU. Again, for RTU, we increased the computation by increasing the
+number of parameters.
+Figure of 2.b shows the first experiment’s results. While GRU’s performance improved as the
+truncation length increased, RTU outperformed GRU across all different computational budgets.
+Figure 2.c shows the results of the second experiment. The RTU agent’s performance consistently
+improves as we increase the computation available. However, the performance improvement for the
+GRU agent is inconsistent. The inconsistency of GRU performance could be associated with the
+trade-off between the truncation length and the number of parameters.
+Scaling With Parameters: Finally, we study the performance of RTU and GRU when given the same
+number of parameters and allow the GRU agent to use more computation. We fixed the truncation
+length for GRU to 45 as before and used the same number of parameters for both agents. Figure 2.d
+shows the results of this experiment. For RTU, we see the same consistent performance improvement
+as we increase the number of parameters. For GRU, the performance improvement is also consistent,
+though it degrades slightly towards the end. The RTU agent outperforms the GRU agent even though
+the GRU uses more computation.
+We provide additional experiments comparing RTUs to two other approaches that use RTRL: online
+LRUs and a real-valued diagonal RNN in Appendix E.1.
+5
+Real-Time Recurrent Policy Gradient
+This section first highlights some differences in using linear RTRL methods, i.e., RTRL with linear
+complexity, in incremental and batch settings. We then investigate different ways of integrating linear
+7
+RTRL methods with policy gradient approaches, and we use PPO as a case study for this investigation.
+Finally, we compare the performance of RTRL methods with T-BPTT methods and other baselines.
+5.1
+Linear RTRL Methods in Incremental and Batch Settings
+The benefits of linear RTRL methods over T-BPTT are more evident in the incremental rather than
+the batch setting. In the incremental learning setting, where the agent updates its parameters after
+each interaction step, linear RTRL methods have a constant computational complexity per update
+that depends only on the number of parameters. In contrast, T-BPTT methods have a complexity
+proportional to the truncation length T since T-BPTT methods require storing a sequence of past T
+activations to perform one gradient update. Figure 3 shows the time it takes to make one update with
+linear RTRL and T-BPTT given the same number of parameters. For T-BPTT, the time to make one
+update scales with the truncation length T, while for linear RTRL, it is constant.
+Figure 3: Contrasting runtime in incremental
+and batch settings. In the incremental set-
+ting, evaluated in the animal-learning predic-
+tion task, T-BPTT updates scale with trunca-
+tion length, whereas linear RTRL is constant.
+With batch updates, evaluated in Ant-P with
+PPO, linear RTRL remains linear and T-BPTT
+is slightly more efficient.
+The computational analysis for the batch setting is different than the incremental setting. In the
+batch setting, linear RTRL still have a constant cost per update and provide an untruncated yet stale
+gradient for all the samples. When using T-BPTT in the batch setting, there are two possibilities for
+the gradient updates. The first option, the typical strategy, is to divide the batch into non-overlapping
+sequences, each of length T, and perform T-BPTT on each sequence. In this case, the cost of one
+gradient update per sequence is a function of T, resulting in an effective update cost per sample
+independent of T. As a result, T-BPTT is computationally efficient in this case, albeit at the expense
+of a worse gradient estimate; in each sequence, only the last sample has a gradient estimate with T
+steps [24]. Figure 3 shows the time it takes to make one batch update with linear RTRL and T-BPTT
+given the same number of parameters. In this case, both methods use similar time per update. The
+second option is to divide the batch into overlapping sequences, where each gradient uses a sequence
+of T steps [24]. This approach increases the cost of updates per sample to be proportional to T,
+as in the incremental setting, with the benefit of better gradient estimates. However, all standard
+implementations of RL methods with T-BPTT use the computationally efficient option [37, 13, 23].
+Integrating Linear RTRL Methods with PPO When performing batch updates, as with PPO, the
+RTRL gradients used to update the recurrent parameters will be stale, as they were calculated during
+the interaction with the environment w.r.t old policy and value parameters. One solution to mitigate
+the gradient staleness is to go through the whole trajectory after each epoch update and re-compute
+the gradient traces. However, this can be computationally expensive. In Appendix F, Algorithm 1, we
+provide the pseudocode for integrating RTRL methods with PPO with optional steps for re-running
+the network to update the RTRL gradient traces, the value targets, and the advantage estimates. We
+also performed an ablation study to investigate the effect of the gradient staleness in RTRL when
+combined with PPO, Appendix F. The results from the ablation study show that using a stale gradient
+results in better performance with RTUs and suggests that the staleness might help PPO maintain the
+trust region.
+6
+Experiments in Memory-Based Control
+In this section, we evaluate the memory capabilities of RTUs when solving challenging RL control
+problems. We divide the problems in this section based on the source of partial observability.
+1) Missing sensory data, where we mask out parts of the agent’s observation. The agent must
+accumulate and integrate the sensory observations over time to account for the missing information. 2)
+Remembering important cues, where the agent must remember an essential cue about the environment
+that happened many steps in advance.
+8
+Integrating Sensory Observations:
+We use the standard Mujoco POMDP benchmark widely
+used in prior work for evaluating memory-based RL agents [30, 11, 26, 31]. The benchmark
+consists of several challenging tasks where the agent controls a multi-joint dynamical body while
+only observing the joints’ positional (Mujoco-P) or velocity information (Mujoco-V). To increase
+experiment throughput, we use the Jax implementation of Mujoco from the Brax library [6] and
+implemented wrappers to mask either the velocity (Mujoco-P) or positional information (Mujoco-V).
+We evaluated our Linear and Non-linear RTUs against GRU, LRU, and Online LRU. All agents use
+PPO [39] as the control algorithm, and the difference between the agents is the recurrent component.
+For all agents, we fixed the number of parameters for the recurrent part to be ∼24k. We tuned the
+learning rate for all agents in all environments and selected the best learning rate for each agent
+per environment. We also included a GPT2-transformer baseline. We followed the implementation
+details in previous work [31], and used a GPT2 variant with 200k parameters. We provide the results
+for GPT2 in Appendix G.
+Figure 4: Learning curves on the Mujoco POMDP benchmark. Environments with -P mean that
+velocity components are occluded from the observations, while -V means that the positions and
+angles are occluded. All architectures have the same number of recurrent parameters ( 24k parameter).
+For each architecture, we show the performance of its best-tuned variant.
+When given the same number of parameters, RTU agents outperform other baselines in all environ-
+ments in Figure 4. Furthermore, we show in Appendix G that even when increasing the truncation
+length of both GRU and LRU agents to use significantly longer history, they outperform RTUs in
+only one task. Of particular note is again that RTUs outperform online LRUs, highlighting again that
+our simple modifications have a large impact on performance in this online RL setting.
+Remembering Important Cues:
+Next, we test the agents’ ability to remember essential environmental cues. We use several tasks
+from the POPGym benchmark [28] in addition to the Reacher POMDP task, a modified version of
+Mujoco Reacher where the agent observes the target position only at the beginning of the episode.
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Env Steps
+1e6
+140
+120
+100
+80
+60
+40
+20
+Undiscounted 
+Return 
+(30 runs)
+Reacher POMDP
+GRU
+Linear RTUs
+NonLinear RTUs
+Online LRU
+Figure 5: Reacher, 30 runs with standard
+errors.
+The POPGym tasks we consider along with the Reacher
+POMDP are all long-term memory tasks [31] as the agent
+must remember and carry the information for a long time.
+Figure 5 summarizes the results for the reacher POMDP
+task and the POPGym results can be found in Figure 6. In
+both cases, we can see that RTUs outperform the other ap-
+proaches. Non-linear RTUs achieve a better performance
+than linear RTUs in reacher POMDP, and both achieve
+a better performance in all tasks than online LRUs. In
+Reacher POMDP, GRU was able to achieve a similar performance to that of linear RTUs.
+Figure 6: Results across several tasks from the POPGym benchmark.
+9
+7
+Conclusion and Limitations
+In this work, we investigated using complex-valued diagonal RNNs for online RL. We built on LRUs,
+to provide a small modification (RTUs) that we found performed significantly better in online RL
+across various partially observable prediction and control settings. We also found RTUs performed
+better than the more computationally intensive GRUs. Overall, RTUs are a promising, lightweight
+approach to online learning in partially observable RL environments.
+A primary limitation of RTUs is the extension to multilayer recurrence. This limitation is inherent
+to all RTRL approaches; with multilayers, we need to save the gradient traces of the hidden state
+w.r.t the weights from all the preceding layers [16]. Previous work [16, 47] showed that using stop
+gradient operations between the layers and not tracing the time dependencies across layers is a viable
+choice. However, we need a more principled approach for tracing the gradient across layers.
+One advantage of the linearity restriction in LRUs is that it allows the use of parallel scans for
+training [25]. However, recent works have shown the possibility of employing parallel scans to
+non-linear RNNs [7, 21]. A future direction is to investigate the use of parallel scans for training
+RTUs.
+8
+Acknowledgments
+We would like to thank Nicolas Zucchet for advice about the online LRU implementation, and
+Subhojeet Pramanik for many discussions on transformers and RNNs. We would like to thank
+NSERC, CIFAR and Amii for research funding and the Digital Research Alliance of Canada for the
+computational resources.
+References
+[1] Firas Al-Hafez, Guoping Zhao, Jan Peters, and Davide Tateo. Time-efficient reinforcement learning with
+stochastic stateful policies. In The Twelfth International Conference on Learning Representations.
+[2] Atilim Gunes Baydin, Barak A Pearlmutter, Alexey Andreyevich Radul, and Jeffrey Mark Siskind.
+Automatic differentiation in machine learning: a survey. Journal of machine learning research, 2018.
+[3] James Bradbury, Roy Frostig, Peter Hawkins, Matthew James Johnson, Chris Leary, Dougal Maclau-
+rin, George Necula, Adam Paszke, Jake VanderPlas, Skye Wanderman-Milne, and Qiao Zhang. JAX:
+composable transformations of Python+NumPy programs, 2018.
+[4] Tim Cooijmans and James Martens. On the variance of unbiased online recurrent optimization. arXiv
+preprint arXiv:1902.02405, 2019.
+[5] Lasse Espeholt, Hubert Soyer, Remi Munos, Karen Simonyan, Vlad Mnih, Tom Ward, Yotam Doron, Vlad
+Firoiu, Tim Harley, Iain Dunning, et al. Impala: Scalable distributed deep-rl with importance weighted
+actor-learner architectures. In International conference on machine learning, 2018.
+[6] C. Daniel Freeman, Erik Frey, Anton Raichuk, Sertan Girgin, Igor Mordatch, and Olivier Bachem. Brax -
+a differentiable physics engine for large scale rigid body simulation, 2021.
+[7] Xavier Gonzalez, Andrew Warrington, Jimmy TH Smith, and Scott W Linderman. Towards scalable and
+stable parallelization of nonlinear rnns. arXiv e-prints, pages arXiv–2407, 2024.
+[8] Gori, Bengio, and De Mori. Bps: a learning algorithm for capturing the dynamic nature of speech. In
+International Joint Conference on Neural Networks, 1989.
+[9] Audrunas Gruslys, Will Dabney, Mohammad Gheshlaghi Azar, Bilal Piot, Marc Bellemare, and Remi
+Munos. The reactor: A fast and sample-efficient actor-critic agent for reinforcement learning. In Interna-
+tional Conference on Learning Representations, 2018.
+[10] Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Timothy Lillicrap. Mastering diverse domains through
+world models. arXiv preprint arXiv:2301.04104, 2023.
+[11] Dongqi Han, Kenji Doya, and Jun Tani. Variational recurrent models for solving partially observable
+control tasks. In International Conference on Learning Representations, 2019.
+10
+[12] Matthew Hausknecht and Peter Stone. Deep recurrent q-learning for partially observable mdps. In 2015
+aaai fall symposium series, 2015.
+[13] Shengyi Huang, Rousslan Fernand Julien Dossa, Chang Ye, Jeff Braga, Dipam Chakraborty, Kinal Mehta,
+and JoÃG, o GM AraÃšjo. Cleanrl: High-quality single-file implementations of deep reinforcement learning
+algorithms. Journal of Machine Learning Research, 2022.
+[14] Kazuki Irie, Imanol Schlag, Róbert Csordás, and Jürgen Schmidhuber. Going beyond linear transformers
+with recurrent fast weight programmers. Advances in neural information processing systems, 2021.
+[15] Kazuki Irie, Imanol Schlag, Róbert Csordás, and Jürgen Schmidhuber. A modern self-referential weight
+matrix that learns to modify itself. In International Conference on Machine Learning, 2022.
+[16] Kazuki Irie, Anand Gopalakrishnan, and Jürgen Schmidhuber. Exploring the promise and limits of real-time
+recurrent learning, 2023.
+[17] Khurram Javed, Haseeb Shah, Rich Sutton, and Martha White. Online real-time recurrent learning using
+sparse connections and selective learning. Journal of Machine Learning Research, 2023.
+[18] Steven Kapturowski, Georg Ostrovski, Will Dabney, John Quan, and Remi Munos. Recurrent experience
+replay in distributed reinforcement learning. In International Conference on Learning Representations,
+2019.
+[19] Shuai Li, Wanqing Li, Chris Cook, Ce Zhu, and Yanbo Gao. Independently Recurrent Neural Network (In-
+dRNN): Building A Longer and Deeper RNN. In Conference on Computer Vision and Pattern Recognition,
+2018.
+[20] Xiujun Li, Lihong Li, Jianfeng Gao, Xiaodong He, Jianshu Chen, Li Deng, and Ji He.
+Recurrent
+reinforcement learning: a hybrid approach. arXiv preprint arXiv:1509.03044, 2015.
+[21] Yi Heng Lim, Qi Zhu, Joshua Selfridge, and Muhammad Firmansyah Kasim. Parallelizing non-linear
+sequential models over the sequence length.
+In The Twelfth International Conference on Learning
+Representations, 2023.
+[22] Chenhao Lu, Ruizhe Shi, Yuyao Liu, Kaizhe Hu, Simon Shaolei Du, and Huazhe Xu. Rethinking
+transformers in solving pomdps. In Forty-first International Conference on Machine Learning.
+[23] Chris Lu, Jakub Kuba, Alistair Letcher, Luke Metz, Christian Schroeder de Witt, and Jakob Foerster.
+Discovered policy optimisation. Advances in Neural Information Processing Systems, 2022.
+[24] Owen Marschall, Kyunghyun Cho, and Cristina Savin. A unified framework of online learning algorithms
+for training recurrent neural networks. Journal of Machine Learning Research, 2020.
+[25] Eric Martin and Chris Cundy. Parallelizing linear recurrent neural nets over sequence length. In Interna-
+tional Conference on Learning Representations, 2018.
+[26] Lingheng Meng, Rob Gorbet, and Dana Kuli´c. Memory-based deep reinforcement learning for pomdps. In
+International Conference on Intelligent Robots and Systems (IROS), 2021.
+[27] Jacob Menick, Erich Elsen, Utku Evci, Simon Osindero, Karen Simonyan, and Alex Graves. Practical
+real time recurrent learning with a sparse approximation. In International Conference on Learning
+Representations, 2021.
+[28] Steven Morad, Ryan Kortvelesy, Matteo Bettini, Stephan Liwicki, and Amanda Prorok. POPGym:
+Benchmarking partially observable reinforcement learning. In International Conference on Learning
+Representations, 2023.
+[29] Michael Mozer. A focused backpropagation algorithm for temporal pattern recognition. Complex Systems,
+1989.
+[30] Tianwei Ni, Benjamin Eysenbach, and Ruslan Salakhutdinov. Recurrent model-free rl can be a strong
+baseline for many pomdps. In International Conference on Machine Learning, 2022.
+[31] Tianwei Ni, Michel Ma, Benjamin Eysenbach, and Pierre-Luc Bacon. When do transformers shine in
+rl? decoupling memory from credit assignment. In Thirty-seventh Conference on Neural Information
+Processing Systems, 2023.
+[32] Yann Ollivier, Corentin Tallec, and Guillaume Charpiat. Training recurrent networks online without
+backtracking, 2015.
+11
+[33] Antonio Orvieto, Samuel L Smith, Albert Gu, Anushan Fernando, Caglar Gulcehre, Razvan Pascanu, and
+Soham De. Resurrecting recurrent neural networks for long sequences, 2023.
+[34] Emilio Parisotto, Francis Song, Jack Rae, Razvan Pascanu, Caglar Gulcehre, Siddhant Jayakumar, Max
+Jaderberg, Raphael Lopez Kaufman, Aidan Clark, Seb Noury, et al. Stabilizing transformers for reinforce-
+ment learning. In International conference on machine learning, 2020.
+[35] P Ivan Pavlov. Conditioned reflexes: an investigation of the physiological activity of the cerebral cortex,
+1927.
+[36] Subhojeet Pramanik, Esraa Elelimy, Marlos C Machado, and Adam White. Recurrent linear transformers.
+arXiv preprint arXiv:2310.15719, 2023.
+[37] Antonin Raffin, Ashley Hill, Adam Gleave, Anssi Kanervisto, Maximilian Ernestus, and Noah Dormann.
+Stable-baselines3: Reliable reinforcement learning implementations.
+Journal of Machine Learning
+Research, 2021.
+[38] Banafsheh Rafiee, Zaheer Abbas, Sina Ghiassian, Raksha Kumaraswamy, Richard S Sutton, Elliot A
+Ludvig, and Adam White. From eye-blinks to state construction: Diagnostic benchmarks for online
+representation learning. Adaptive Behavior, 2020.
+[39] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy
+optimization algorithms, 2017.
+[40] Sutton. Toward a new approach to model-based reinforcement learning, 2020.
+[41] Sutton. Markov and agent state, 2020.
+[42] Corentin Tallec and Yann Ollivier. Unbiased online recurrent optimization, 2017.
+[43] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz
+Kaiser, and Illia Polosukhin. Attention is all you need. Advances in neural information processing systems,
+2017.
+[44] Williams and Peng. An efficient gradient-based algorithm for on-line training of recurrent network
+trajectories. Neural computation, 1990.
+[45] Williams and Zipser. A learning algorithm for continually running fully recurrent neural networks. Neural
+computation, 1989.
+[46] Ailing Zeng, Muxi Chen, Lei Zhang, and Qiang Xu. Are transformers effective for time series forecasting?,
+2022.
+[47] Nicolas Zucchet, Robert Meier, Simon Schug, Asier Mujika, and João Sacramento. Online learning of
+long range dependencies. In Advances in Neural Information Processing Systems, 2023.
+A
+More Details on Representability with Complex-valued Diagonal
+Recurrence
+This section explains why we need complex-valued diagonals to represent dense recurrent layers.
+We first show when it is equivalent to use complex-valued diagonal and a dense recurrent layer. We
+highlight that using a real-valued diagonal is like restricting the weights to be symmetric—because
+the (complex) diagonal corresponds to the eigenvalues of the weight matrix—which can severely
+limit representability. We provide a small experiment to show that complex eigenvalues naturally
+arise when training both a dense linear and nonlinear RNN, further motivating the utility of moving
+towards complex-valued diagonals.
+A.1
+Representability with Complex-valued Diagonals
+Let us first consider when we can perfectly represent a dense, linear recurrent layer with a complex-
+valued diagonal recurrent layer. Assume we have the recurrence relationship, with learnable parame-
+ters Wh ∈Rn×n and Wx ∈Rn×d,
+ht .= f(Whht−1 + Wxu(xt))
+(5)
+where f is a potentially nonlinear function that inputs a vector and outputs the same-sized vector and
+u can be any transformation of the inputs xt before they are inputted into the recurrent layer. The
+following equivalence result is straightforward but worthwhile formalizing.
+12
+Proposition A.1. Assume f ◦P = P◦f for any full rank, potentially complex-valued P ∈Cn×n with
+unit-length column vectors. Then given any Wh and Wx for Equation (5), there is a corresponding
+complex-valued diagonal weight matrix Λ ∈Cn×n and Wx ∈Cn×d
+ht = f(Λht−1 + Wx u(xt)).
+(6)
+where ht ∈Cn is a linear transformation of ht ∈Rn.
+Proof. We can rewrite the square matrix Wh using an eigenvalue decomposition Wh = P Λ P−1,
+where P contains the n linearly independent eigenvectors and Λ is a diagonal matrix with the
+corresponding eigenvalues. Then, we can re-write (5) as:
+ht = f(P Λ P−1 ht−1 + PP−1Wx u(xt))
+= Pf(Λ P−1 ht−1 + P−1Wx u(xt))
+P−1ht = f(ΛP−1 ht−1 + P−1 Wx u(xt))
+(7)
+where P came outside of f under our assumption that it commutes with such matrices of eigenvectors.
+By defining ht .= P−1 ht and Wx
+.= P−1Wx, we get Eq. (6).
+We can see ht and ht are representationally equivalent: they are linearly weighted for downstream
+predictions, and so the linear transformation on ht can fold into this downstream linear weighting.
+But it is more computationally efficient to use ht with a diagonal weight matrix Λ, meaning each
+hidden unit only has one recurrent relation instead of n.
+Since we did not impose constraints on the matrix Wh, other than being diagonalizable, the eigen-
+values of Wh can be complex or real numbers. Previous diagonal RNNs such as eLSTM [16],
+Columnar networks [17], and IndRNN [19] use only real-valued diagonal matrices. Having only
+real-valued diagonals implicitly assumes that the matrix Wh is a symmetric matrix. [33] suggested
+using complex-valued diagonal matrices for better performance.
+The above equivalence has only been used without any activation, namely in linear-recurrent units
+(LRUs) [33]. A natural question is if only the identity f(x) = x (and linear functions) satisfy
+this property of commuting with eigenvector matrices. Intuitively, this seems like the only option,
+as imagining a nonlinearity that commutes is hard. Surprisingly, for the more restricted case of
+symmetric Wh, we can show a slightly more general class of activations can be used, proving
+an if-and-only-if relationship (see Appendix A.2). However, even for this restricted setting, this
+generalized class is limited and such activations unlikely to be preferable to a linear recurrence. We
+see this as a negative result, that suggests this equivalence only holds for the linear setting.
+A.2
+More on the Equivalence of Non-Linear RTUs and Dense RNNs
+As discussed in the main body, we likely only have an equivalence between using a full dense weight
+matrix and a complex-valued diagonal matrix for linear recurrent layers. However, we can obtain a
+slightly more general equivalence in the restricted setting where the weight matrix for the recurrence
+is symmetric. This restricted setting is not of general interest, but we include the result here because
+it could be of interest to a few.
+For the case where we have a symmetric weight matrix, we need the activation to commute with
+orthonormal matrices. Consider again the form
+ht .= f(Whht−1 + Wxxt)
+(5)
+where f is a potentially nonlinear function that inputs a vector and outputs the same-sized vector. To
+obtain the equivalence, assume that for any orthonormal matrix A, f ◦A = A ◦f. We can rewrite
+the square and symmetric matrix Wh using an eigenvalue decomposition Wh = A Λ A⊤, where
+A contains the n linearly independent eigenvectors and is an orthonormal matrix and Λ is a diagonal
+matrix with the corresponding eigenvalues. Then, we can re-write (5) as:
+ht = f(A Λ A⊤ht−1 + AA⊤Wx xt)
+= Af(Λ A⊤ht−1 + A⊤Wx xt)
+A⊤ht = ΛA⊤ht−1 + A⊤Wx xt
+(8)
+13
+where A came outside of f because commutes with orthonormal matrices. By defining ht .= A⊤ht
+and Wx
+.= A⊤Wx, we get:
+ht = f(Λht−1 + Wx xt).
+(6)
+Each hidden unit now has one recurrent relation instead of n, because our weight matrix Λ is diagonal.
+A natural question is if only the identity f(x) = x—namely linear recurrence—satisfies this property
+of commuting with orthonormal matrices. We show below that it holds for a slightly more general
+class of recurrent layers, proving an if-and-only-if relationship. We see the below result as a negative
+result, highlighting that this equivalence largely only holds for the linear setting and does not
+generalize to other activations of interest. It provides even further evidence that likely the only setting
+of interest for the general non-symmetric case is also with a linear recurrence.
+Nonetheless, let us obtain the if-and-only-if for completeness. A simple extension that continues to
+satisfies this property is f(x) = xc(||x||2) for any c : R →R. We can see that for any orthonormal
+A, we have
+f(Ax) = Axc(||Ax||2) = Axc(||x||2) = Af(x).
+This means that we can have activations that rescale the input x depending on the norm of that input.
+More generally, the activation can involve matrices and rotations. We can define θ(x) = [x U(x)]⊤
+where U(x) ∈Rn×n−1 is a matrix where the columns are orthogonal vectors to each other and to
+x. Then for any vector-valued g : R →Rn, we have that f(x) = θ(x)⊤g(||x||2) also satisfies this
+property:
+f(Ax) = θ(Ax)⊤g(||Ax||2) = [Ax; U(Ax)]g(||x||2)
+= A[x; U(x)]g(||x||2) = Af(x).
+The last line follows because AU(x) = U(Ax). Namely, for any orthogonal vector u with u⊤x = 0,
+we have that ˜u .= Au satisfies ˜u⊤Ax = u⊤A⊤Ax = u⊤x = 0 because A⊤A = I.
+Now we show this formally. Denote On ⊂Rn×n : A ∈On ⇐⇒AT A = AAT = I. Denote
+ei =
+
+
+0
+...
+1
+...
+0
+
+
+, where the ith element is 1.
+Definition A.2. θ(x) is a matrix such that:
+θ(x) ∈On
+θ(x)x = ∥x∥2
+2e1
+(9)
+Lemma A.3. θ(x) exits and ∀A ∈On,θ(Ax) = θ(x)AT
+Proof. Let θ(x) be ∈On. Then, by definition of On, θ(x)Tθ(x) = θ(x)θ(x)T = I. Let θ(x)[1] =
+x, and θ(x)[2 :] be any orthogonal vectors, also orthogonal to x. Where θ(x)[i] be the ith row of
+θ(x). Then, for x ∈Rn, θ(x)x = ∥x∥2e1.
+θ(Ax)Ax = ∥Ax∥2
+2e1 = ∥x∥2
+2e1 = θ(x)x
+θ(Ax)Tθ(Ax)Ax = θ(Ax)Tθ(x)x
+Ax = θ(Ax)Tθ(x)x
+AT Ax = ATθ(Ax)Tθ(x)x
+x = ATθ(Ax)Tθ(x)x
+ATθ(Ax)Tθ(x) = I
+θ(Ax)T = θ(x)AT
+(10)
+14
+Theorem A.4. Let f : Rn →Rn and A ∈On. Then, f ◦A = A ◦f ⇐⇒∃g : R →Rn, f(x) =
+θ(x)T g(∥x∥2)
+Proof. Define g(α) = f(α2e1).
+f(x) = θ(x)Tθ(x)f(x)
+= θ(x)T f(θ(x)x)
+= θ(x)T f(∥x∥2
+2e1)
+= θ(x)T g(∥x∥2)
+(11)
+(f ◦A)(x) = f(Ax)
+= θ(Ax)T g(∥Ax∥2)
+= θ(Ax)T g(∥x∥2)
+= Aθ(x)T g(∥x∥2)
+= (A ◦f)(x)
+(12)
+A.3
+Complex Eigenvalues in Vanilla RNNs
+We empirically investigate whether complex eigenvalues appear when training dense RNNs in a
+simple task. The goal is to show that Wh is not a symmetric matrix, even in the simplest tasks, so
+having only real-valued diagonals is too restrictive. We used the Three State POMDP[41] for this
+experiment.
+The Three State MDP is depicted in Figure 7. In this task, the agent needs to remember one cue from
+the previous time-step ago, to make a prediction about the next time-step. The MDP has three states,
+s1, s2, and s3, and no actions. If the agent is in either s1 or s2, it transitions to any of the three states
+with equal probability. However, if the agent is in s3, it transitions to the state preceded by s3. A
+sequence of observations would look like 1, 3, 1, 2, 2, 3, 2, · · · , and we ask the agent to predict the
+next observation.
+Figure 7: Illustration of the Three State MDP. We used dashed lines for the transitions starting in s3
+to make them more visible.
+We trained a vanilla RNN with 3 hidden states with T-BPTT with truncation length 2, which is a
+sufficient history length in this problem to predict the next observation. Since we have 3 hidden states,
+the matrix Wh is ∈R3×3 and could have at most 2 complex eigenvalues.
+We measured the performance in terms of the percentage of correct predictions made in S3. We
+recorded the number of complex eigenvalues of Wh after each parameter update, shown in Figure 8.
+This agent reaches 100% accuracy in this problem relatively quickly. We can also see that the agent
+oscillates between having two complex eigenvalues and zero eigenvalues. The average number of
+complex eigenvalues across 30 run is above 1.5, which means that on more than 3
+4 of the steps, the
+RNN has two complex eigenvalues. The primary point is that we see complex eigenvalues appear
+frequently.
+15
+0
+200
+400
+Steps (×1K)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Prediction 
+Accuracy
+0
+200
+400
+Steps (×1K)
+0.0
+0.5
+1.0
+1.5
+2.0
+# Complex 
+Eigenvalues
+Figure 8: Left: The percentage of correct predictions when training an RNN in the Three State MDP.
+Right: Number of complex eigenvalues when training an RNN in the Three States MDP. The solid
+line is the mean over 30 runs, the shaded region area is the standard error, and the lines are individual
+runs.
+B
+Background on BackPropagation Through Time and Real-Time Recurrent
+Learning
+This section provides a brief background on BackPropagation Through Time (BPTT) and Real-Time
+Recurrent Learning (RTRL) algorithms.
+B.1
+BackPropagation Through Time
+BPTT calculates the gradient, ∇ψL, by unfolding the recurrent dynamics through time and incorpo-
+rating the impact of the parameters on the loss from all observed time steps. Formally, we can write
+∇ψL as:
+∇ψL = 1
+t
+t−1
+X
+i=0
+∇ψLi.
+(13)
+Applying the chain rule, we re-write Eq.13 as:
+∇ψL = 1
+t
+t−1
+X
+i=0
+∇ψLi
+= 1
+t
+t−1
+X
+i=0
+∂Li
+∂hi
+∂hi
+∂ψ .
+(14)
+When calculating ∂hi
+∂ψ , we need to consider the effect of ψ from all the time steps. To illustrate this
+effect, consider unrolling the last 2 steps of the RNN dynamics:
+ht = f(ht−1, xt,ψ)
+Re-write ht−1 as f(ht−2, xt−1,ψ)
+= f(f(ht−2, xt−1,ψ), xt,ψ)
+Re-write ht−2 as f(ht−3, xt−2,ψ)
+= f(f(f(ht−3, xt−2,ψ), xt−1,ψ), xt,ψ).
+(15)
+Equation 15 shows that the network parameters ψ affect the construction of the recurrent state ht
+through two pathways: a direct pathway, i.e., using ψ to evaluate f(ht−1, xt,ψ), and an implicit
+pathway, i.e., ψ affected constructing all previous recurrent states, ht−1, . . . , h1, and all those
+recurrent states affected ht construction. Thus, to calculate ∂ht
+∂ψ , we need to consider those two
+pathways:
+∂ht
+∂ψ = ∂f(ht−1, xt,ψ)
+∂ψ
++ ∂f(ht−1, xt,ψ)
+∂ht−1
+∂ht−1
+∂ψ
+.
+(16)
+16
+Once again, we need to consider the two pathways when evaluating ∂ht−1
+∂ψ
+in 16. For simplicity, let
+Jt .= ∂ht
+∂ψ , Bt = ∂f(ht−1,xt,ψ)
+∂ψ
+, Ct = ∂f(ht−1,xt,ψ)
+∂ht−1
+, and re-write 16:
+Jt = Bt + CtJt−1
+= Bt + Ct (Bt−1 + Ct−1Jt−2)
+Unrolling Jt−1
+= Bt + CtBt−1 + CtCt−1Jt−2
+= Bt + CtBt−1 + CtCt−1 (Bt−2 + Ct−2Jt−3)
+Unrolling Jt−2
+= Bt + CtBt−1 + CtCt−1Bt−2 + CtCt−1Ct−2Jt−3
+= Bt + CtBt−1 + CtCt−1Bt−2 + · · · + CtCt−1Ct−2 . . . C2B1 + CtCt−1Ct−2 . . . C1J0
+Keep unrolling
+=
+t
+X
+k=1
+ 
+tY
+i=k+1
+Ci
+!
+Bk +
+ tY
+i=1
+Ci
+!
+J0.
+(17)
+Writing ∂ht
+∂ψ using the results from 17:
+∂ht
+∂ψ = ∂f(ht−1, xt,ψ)
+∂ψ
++ ∂f(ht−1, xt,ψ)
+∂ht−1
+∂ht−1
+∂ψ
+=
+t
+X
+k=1
+ 
+tY
+i=k+1
+∂f(hi−1, xi,ψ)
+∂hi−1
+!
+∂f(hk−1, xk,ψ)
+∂ψ
++
+ tY
+i=1
+∂f(hi−1, xi,ψ)
+∂hi−1
+!
+∂h0
+∂ψ .
+(18)
+According to Eq. 18, the agent needs to store all the previous inputs to calculate ∂ht
+∂ψ which is
+impractical; the computation and memory complexity will be increasing with t.
+B.1.1
+Truncated-BackPropagation Through Time
+Williams and Peng (1990) introduced Truncated-BackPropagation Through Time (T-BPTT) which
+solves the issue of increasing memory and computational complexities of BPTT. In T-BPTT, we
+specify a truncation length T, which controls the number of steps considered when calculating the
+gradient in 18. We now write the truncated version of 17 which takes into consideration the gradient
+from the last T steps only:
+Jt =
+t
+X
+k=t−T
+ 
+tY
+i=k+1
+Ci
+!
+Bk
+(19)
+Using results from 19, we then write the approximated gradient of the loss w.r.t the learnable
+parameters:
+∇ψL =
+t
+X
+j=t−T
+∂Lj
+∂hj
+∂hj
+∂ψ
+=
+t
+X
+j=t−T
+∂Lj
+∂hj
+j
+X
+k=j−T
+ 
+tY
+i=k+1
+∂f(hi−1, xi,ψ)
+∂hi−1
+!
+∂f(hk−1, xk,ψ)
+∂ψ
++
+ tY
+i=1
+∂f(hi−1, xi,ψ)
+∂hi−1
+!
+∂h0
+∂ψ
+(20)
+B.2
+Real-Time Recurrent Learning
+Williams and Zipser (1989) introduced the Real-time Recurrent Learning algorithm (RTRL) as a
+learning algorithm for continual recurrent learning. RTRL employs the recurrent formulation of the
+gradient in 16; instead of unrolling ∂ht−1
+∂ψ
+further back in time, RTRL saves its calculated value from
+the previous time step and use it later when needed. It is worth emphasizing that after the agent
+updates its parameters, the gradient information saved from previous time steps would be stale, i.e.,
+calculated w.r.t old parameters, however, under the assumption of small learning rates, RTRL is
+17
+known to converge. The gradient formulation of RTRL can be written as:
+∇ψL =
+t
+X
+i=0
+∂Li
+∂hi
+∂hi
+∂ψ
+=
+t
+X
+i=0
+∂Li
+∂hi
+∂f(hi−1, xi,ψ)
+∂ψ
++ ∂f(hi−1, xi,ψ)
+∂hi−1
+∂hi−1
+∂ψ
+
+(21)
+C
+Recurrent Trace Units
+This appendix details the parametrization used for RTUs, the derivation of the RTRL update rules,
+and the extension of RTUs to multi-layers.
+C.1
+Empirical Analysis for different r and θ parameterizations:
+Since r represents the magnitude of a complex number, then r ∈R+. Additionally, it is preferred to
+have r ∈(0, 1] to avoid vanishing/exploding gradients. Let wr be a learnable parameter which could
+directly represent r or represent a function of r, we can enforce the constraints on r in several ways:
+1. Direct learning: Learn r directly, and clip it after each parameter’s update to be in (0, 1].
+2. Enforcing r ∈R+: Learn ν such that r .= exp(−ν). This parameterization enforces r to be
+positive. However, additional clipping is needed to enforce r ∈(0, 1].
+3. Enforcing stability on r: We can enforce r to be ∈(0, 1] by using a positive non-linear
+function. For example, learn νlog such that r .= exp(−exp(νlog)), this parameterization
+ensures that r ∈(0, 1] and is suggested by Orvieto et al. [33]. Another example is learning
+r = σ(ν), which also ensures r ∈(0, 1].
+Finally, we can also enforce stability on θ by learning θlog such that θ .= exp(θlog) to ensure that θ is
+always positive.
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+Step Size
+0.10
+0.15
+0.20
+0.25
+0.30
+0.35
+MSRE
+Linear RTU with 80 hidden units
+r = exp( exp( log)),
+= exp(
+log)
+r = exp( exp( log)),
+r = exp(
+),
+Figure 9: Learning rate sensitivity for different parameterizations of r and θ for RTUs with 80 hidden
+units.
+We empirically compare the different parameterizations of r and θ. In our experiments, learning r
+directly resulted in unstable training where the MSRE diverges. We plot the learning rate sensitivity
+for the other parameterization for two different sizes of RTUs in Figures 9 and 10. While all the
+parametrizations produce similar performance, we notice that learning θlog and νlog has better
+learning rate sensitivity.
+18
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+Step Size
+0.0
+0.5
+1.0
+1.5
+MSRE
+Linear RTU with 512 hidden units
+r = exp( exp( log)),
+= exp(
+log)
+r = exp( exp( log)),
+r = exp(
+),
+Figure 10: Learning rate sensitivity for different parameterizations of r and θ for RTUs with 512
+hidden units.
+C.2
+Real-Time Recurrent Learning for a Single Layer Linear RTUs
+We now outline the details for the RTRL update rules for RTUs. The set of learnable parameters for
+RTUs is ψ .= {ν log,θlog, Wc1
+x , Wc2
+x }. At each time step t, the learner receives a loss Lt(ˆyt, yt;ψ)
+where yt is the network output at time t, then the gradient of the loss w.r.t the parameters is:
+∂Lt
+∂ψ = ∂Lt
+∂ht
+∂ht
+∂hc1
+t
+∂hc1
+t
+∂ψ + ∂Lt
+∂ht
+∂ht
+∂hc2
+t
+∂hc2
+t
+∂ψ ,
+(22)
+where ∂hc1
+t
+∂ψ
+=
+n
+∂hc1
+t
+∂ν log , ∂hc1
+t
+∂θlog , ∂hc1
+t
+∂W c1
+x , ∂hc1
+t
+∂W c1
+x
+o
+and ∂hc2
+t
+∂ψ
+=
+n
+∂hc2
+t
+∂ν log , ∂hc2
+t
+∂θlog , ∂hc2
+t
+∂W c2
+x , ∂hc2
+t
+∂W c2
+x
+o
+.
+We can derive the following gradients:
+∂hc1
+t
+∂ν log = ∂g(ν,θ)
+∂ν log
+⊙hc1
+t−1 + g(ν,θ)∂hc1
+t−1
+∂ν log −∂ϕ(ν,θ)
+∂ν log
+⊙hc2
+t−1 −ϕ(ν,θ)∂hc2
+t−1
+∂ν log +
+∂γ
+∂ν log
+⊙Wc1
+x xt
+∂hc2
+t
+∂ν log = ∂g(ν,θ)
+∂ν log
+⊙hc2
+t−1 + g(ν,θ)∂hc2
+t−1
+∂ν log + ∂ϕ(ν,θ)
+∂ν log
+⊙hc1
+t−1 + ϕ(ν,θ)∂hc1
+t−1
+∂ν log +
+∂γ
+∂ν log
+⊙Wc2
+x xt
+(23)
+∂hc1
+t
+∂θlog = ∂g(ν,θ)
+∂θlog
+⊙hc1
+t−1 + g(ν,θ)∂hc1
+t−1
+∂θlog −∂ϕ(ν,θ)
+∂θlog
+⊙hc2
+t−1 −ϕ(ν,θ)∂hc2
+t−1
+∂θlog
+∂hc2
+t
+∂θlog = ∂g(ν,θ)
+∂θlog
+⊙hc2
+t−1 + g(ν,θ)∂hc2
+t−1
+∂θlog + ∂ϕ(ν,θ)
+∂θlog
+⊙hc1
+t−1 + ϕ(ν,θ)∂hc1
+t−1
+∂θlog
+(24)
+where
+∂g(ν,θ)
+∂ν log
+= −g(ν,θ) exp(ν log)
+∂g(ν,θ)
+∂θlog
+= −ϕ(ν,θ) exp(θlog)
+∂ϕ(ν,θ)
+∂ν log
+= −ϕ(ν,θ) exp(ν log)
+∂ϕ(ν,θ)
+∂θlog
+= g(ν,θ) exp(θlog)
+(25)
+19
+To efficiently compute the gradient w.r.t Wc1
+x and Wc2
+x , we look at the influence of each when
+considering a single element from each recurrent state, hc1
+t and hc2
+t :
+hc1
+t,i = g(νi, θi)hc1
+t−1,i −ϕ(νi, θi)hc2
+t−1,i + γi
+d
+X
+j=0
+wc1
+x,(i,j)xt,j
+hc2
+t,i = g(νi, θi)hc2
+t−1,i + ϕ(νi, θi)hc1
+t−1,i + γi
+d
+X
+j=0
+wc2
+x,(i,j)xt,j.
+(26)
+We then get:
+∂hc1
+t,i
+∂W c1
+x,(i,j)
+= g(νi, θi)
+∂hc1
+t−1,i
+∂W c1
+x,(i,j)
+−ϕ(νi, θi)
+∂hc2
+t−1,i
+∂W c1
+x,(i,j)
++ γixt,j
+∂hc2
+t,i
+∂W c1
+x,(i,j)
+= g(νi, θi)
+∂hc2
+t−1,i
+∂W c1
+x,(i,j)
++ ϕ(νi, θi)
+∂hc1
+t−1,i
+∂W c1
+x,(i,j)
+∂hc1
+t,i
+∂W c2
+x,(i,j)
+= g(νi, θi)
+∂hc1
+t−1,i
+∂W c2
+x,(i,j)
+−ϕ(νi, θi)
+∂hc2
+t−1,i
+∂W c2
+x,(i,j)
+∂hc2
+t,i
+∂W c2
+x,(i,j)
+= g(νi, θi)
+∂hc2
+t−1,i
+∂W c2
+x,(i,j)
++ ϕ(νi, θi)
+∂hc1
+t−1,i
+∂W c2
+x,(i,j)
++ γixt,j.
+(27)
+We see that each hc1
+t,i gets affected by weights from only one row of Wc1
+x , thus, ∂hc1
+t
+Wc1
+x can be written
+as a matrix of the same dimension as Wc1
+x . The same is true for ∂hc2
+t
+Wc2
+x , ∂hc1
+t
+Wc2
+x , and ∂hc2
+t
+Wc1
+x .
+C.3
+Single Layer Non-Linear RTUs Formulation:
+We extend the linear RTUs to non-linear RTUs by adding a non-linear activation function f to the
+recurrent states. We can write the non-linear RTUs as follows:
+hc1
+t = f(g(ν ,θ) ⊙hc1
+t−1 −ϕ(ν ,θ) ⊙hc2
+t−1 + γ ⊙Wc1
+x xt)
+hc2
+t = f(g(ν ,θ) ⊙hc2
+t−1 + ϕ(ν ,θ) ⊙hc1
+t−1 + γ ⊙Wc2
+x xt)
+ht = [hc1
+t ; hc2
+t ]
+(28)
+where f : Rn →Rn. Following the same procedure as in the linear case, we can derive RTRL update
+rules for the non-linear RTUs.
+∂hc1
+t
+∂ν log = f ′(·)(∂g(ν,θ)
+∂ν log
+⊙hc1
+t−1 + g(ν,θ)∂hc1
+t−1
+∂ν log −∂ϕ(ν,θ)
+∂ν log
+⊙hc2
+t−1 −ϕ(ν,θ)∂hc2
+t−1
+∂ν log )
+∂hc2
+t
+∂ν log = f ′(·)(∂g(ν,θ)
+∂ν log
+⊙hc2
+t−1 + g(ν,θ)∂hc2
+t−1
+∂ν log + ∂ϕ(ν,θ)
+∂ν log
+⊙hc1
+t−1 + ϕ(ν,θ)∂hc1
+t−1
+∂ν log )
+(29)
+∂hc1
+t
+∂θlog = f ′(·)(∂g(ν,θ)
+∂θlog
+⊙hc1
+t−1 + g(ν,θ)∂hc1
+t−1
+∂θlog −∂ϕ(ν,θ)
+∂θlog
+⊙hc2
+t−1 −ϕ(ν,θ)∂hc2
+t−1
+∂θlog )
+∂hc2
+t
+∂θlog = f ′(·)(∂g(ν,θ)
+∂θlog
+⊙hc2
+t−1 + g(ν,θ)∂hc2
+t−1
+∂θlog + ∂ϕ(ν,θ)
+∂θlog
+⊙hc1
+t−1 + ϕ(ν,θ)∂hc1
+t−1
+∂θlog )
+(30)
+hc1
+t,i = f(g(νi, θi)hc1
+t−1,i −ϕ(νi, θi)hc2
+t−1,i + γi
+d
+X
+j=0
+wc1
+x,(i,j)xt,j)
+hc2
+t,i = f(g(νi, θi)hc2
+t−1,i + ϕ(νi, θi)hc1
+t−1,i + γi
+d
+X
+j=0
+wc2
+x,(i,j)xt,j)
+(31)
+20
+We then get:
+∂hc1
+t,i
+∂W c1
+x,(i,j)
+= f ′(·)(g(νi, θi)
+∂hc1
+t−1,i
+∂W c1
+x,(i,j)
+−ϕ(νi, θi)
+∂hc2
+t−1,i
+∂W c1
+x,(i,j)
++ γixt,j)
+∂hc2
+t,i
+∂W c1
+x,(i,j)
+= f ′(·)(g(νi, θi)
+∂hc2
+t−1,i
+∂W c1
+x,(i,j)
++ ϕ(νi, θi)
+∂hc1
+t−1,i
+∂W c1
+x,(i,j)
+)
+∂hc1
+t,i
+∂W c2
+x,(i,j)
+= f ′(·)(g(νi, θi)
+∂hc1
+t−1,i
+∂W c2
+x,(i,j)
+−ϕ(νi, θi)
+∂hc2
+t−1,i
+∂W c2
+x,(i,j)
+)
+∂hc2
+t,i
+∂W c2
+x,(i,j)
+= f ′(·)(g(νi, θi)
+∂hc2
+t−1,i
+∂W c2
+x,(i,j)
++ ϕ(νi, θi)
+∂hc1
+t−1,i
+∂W c2
+x,(i,j)
++ γixt,j)
+(32)
+C.4
+Complexity Analysis of RTUs
+We now move to calculate the computation and memory complexity of RTUs when learning using
+the RTRL rules introduced in the previous section.
+For an input xt ∈Rd and hidden states ht = [f(hc1
+t ); f(hc2
+t )] ∈R2n,we have g(ν,θ),ϕ(ν,θ),γ ∈
+Rn and Wc1
+x , Wc2
+x ∈Rd×n.
+An agent using the RTU with RTRL needs to store the gradient information,
+∂hc1
+t−1
+∂ψ
+and
+∂hc2
+t−1
+∂ψ , from
+one step to the next. We denote the set of saved gradient information as:
+∇ν t−1 .=
+∂hc1
+t−1
+∂ν log , ∂hc2
+t−1
+∂ν log
+
+∇θt−1 .=
+∂hc1
+t−1
+∂θlog , ∂hc2
+t−1
+∂θlog
+
+∇W t−1
+x
+.=
+∂hc1
+t−1
+∂Wc1
+x
+, ∂hc2
+t−1
+∂W c1
+x
+, ∂hc1
+t−1
+∂Wc2
+x
+, ∂hc2
+t−1
+∂W c2
+x
+
+.
+(33)
+The saved gradient information has the following dimensions:
+∇ν t−1 ∈R2n
+∇θt−1 ∈R2n
+∇W t−1
+x
+∈R4(d×n).
+(34)
+Then, it follows that memory complexity for RTU with RTRL is O(n + nd). i.e., linear in the number
+of parameters.
+For the computational complexity, a forward pass according to 2 has a computational complexity
+of O(n + nd). Additionally, after doing the forward pass, the learner needs to update the saved
+gradient information according to equations 23 through 27 which has a computational complexity of
+O(n + nd). To summarize, using Real-Time Recurrent Learning with RTUs has linear computational
+and memory complexities.
+C.5
+Multi-Layers Recurrent Trace Units
+We now extend RTUs to a multilayer setting. We show that in the multilayer case, we lose the compu-
+tational advantages. However, prior work suggested that treating each recurrent layer independently
+is a sensible choice and allows us to gain a computational advantage[17]. Consider an RTU with n
+layers, we refer to the hidden dimension of a layer i where 0 < i ≤n as di. The network has the
+following set of parameters:
+ψ .= {ψ1,ψ2,ψ3, . . . ,ψn},
+ψi .= {ν log,i,θlog,i, Wc1,i
+x
+, Wc2,i
+x
+}
+(35)
+21
+To update the network parameters, we need to calculate the gradient of the loss w.r.t the parameters
+from all the layers:
+∂Lt
+∂ψ = ∂Lt
+∂hn
+t
+∂hn
+t
+∂ψ
+∂hn
+t
+∂ψ =
+(
+∂hn
+t
+∂ψ1
+, ∂hn
+t
+∂ψ2
+, ∂hn
+t
+∂ψ3
+, . . . , ∂hn
+t
+∂ψn
+)
+(36)
+where
+hn
+t =
+
+f(hc1,n
+t
+)
+f(hc2,n
+t
+)
+
+(37)
+Take as an example the gradient of hc1,n
+t
+w.r.t ν log,n,ν log,n−1, . . . ,ν log,1. Unrolling the last two
+layers of the network, we get:
+hc1,n
+t
+= g(ν n,θn) ⊙hc1,n
+t−1 −ϕ(ν n,θn) ⊙hc2,n
+t−1 + γn ⊙Wc1,n
+x
+hn−1
+t
+= g(ν n,θn) ⊙hc1,n
+t−1 −ϕ(ν n,θn) ⊙hc2,n
+t−1 + γn ⊙Wc1,n
+x
+
+f(hc1,n−1
+t
+)
+f(hc2,n−1
+t
+)
+
+= g(ν n,θn) ⊙hc1,n
+t−1 −ϕ(ν n,θn) ⊙hc2,n
+t−1 + γn ⊙Wc1,n
+x
+
+f(g(ν n−1,θn−1) ⊙hc1,n−1
+t−1
+−ϕ(ν n−1,θn−1) ⊙hc2,n−1
+t−1
++ γn−1 ⊙Wc1,n−1
+x
+hn−2
+t
+)
+f(g(ν n−1,θn−1) ⊙hc2,n−1
+t−1
++ ϕ(ν n−1,θn−1) ⊙hc1,n−1
+t−1
++ γn−1 ⊙Wc2,n−1
+x
+hn−2
+t
+)
+
+(38)
+The gradient of hc1,n
+t
+w.r.t ν log,n can be calculated in linear complexity as indicated in the previous
+section.
+Calculating the gradient w.r.t the parameters from the earlier layer:
+∂hc1,n
+t
+∂ν log,n−1 = g(ν n,θn) ∂hc1,n
+t−1
+∂ν log,n−1 −ϕ(ν n,θn) ∂hc2,n
+t−1
+∂ν log,n−1 + γn ⊙Wc1,n
+x
+∂hn−1
+t
+∂ν log,n−1
+∂hn−1
+t
+∂ν log,n−1 ∈R2dn−1 Can be calulated with linear complexity.
+∂hc1,n
+t−1
+∂ν log,n−1 ∈Rdn×dn−1 Saved from previous timestep.
+∂hc2,n
+t−1
+∂ν log,n−1 ∈Rdn×dn−1 Saved from previous timestep.
+(39)
+∂hc1,n
+t
+∂ν log,n−2 = g(ν n,θn) ∂hc1,n
+t−1
+∂ν log,n−2 −ϕ(ν n,θn) ∂hc2,n
+t−1
+∂ν log,n−2 + γn ⊙Wc1,n
+x
+∂hn−1
+t
+∂ν log,n−2
+= g(ν n,θn) ∂hc1,n
+t−1
+∂ν log,n−2 −ϕ(ν n,θn) ∂hc2,n
+t−1
+∂ν log,n−2 + γn ⊙Wc1,n
+x
+f ′(·)
+
+g(ν n−1,θn−1)
+∂hc1,n−1
+t−1
+∂ν log,n−2 −ϕ(ν n−1,θn−1)
+∂hc2,n−1
+t−1
+∂ν log,n−2 + γn−1 ⊙Wc1,n−1
+x
+∂hn−2
+t
+∂ν log,n−2
+g(ν n−1,θn−1)
+∂hc2,n−1
+t−1
+∂ν log,n−2 + ϕ(ν n−1,θn−1)
+∂hc1,n−1
+t−1
+∂ν log,n−2 + γn−1 ⊙Wc2,n−1
+x
+∂hn−2
+t
+∂ν log,n−2
+
+
+∂hn−2
+t
+∂ν log,n−2 ∈R2dn−2 Can be calulated with linear complexity.
+∂hc1,n−1
+t−1
+∂ν log,n−2 ∈Rdn−1×dn−2 Saved from previous timestep.
+∂hc2,n−1
+t−1
+∂ν log,n−2 ∈Rdn−1×dn−2 Saved from previous timestep.
+∂hc1,n
+t−1
+∂ν log,n−2 ∈Rdn×dn−2 Saved from previous timestep.
+∂hc2,n
+t−1
+∂ν log,n−2 ∈Rdn×dn−2 Saved from previous timestep.
+(40)
+22
+Let’s define Ji,i−1 = {
+∂hc1,i
+t−1
+∂ν log,i−1 ,
+∂hc2,i
+t−1
+∂ν log,i−1 }. Then, to calculate the gradient of the hidden units from
+layer n w.r.t the parameters from layer n−1, we need save Jn,n−1, and to calculate the gradient of the
+hidden units from layer n w.r.t the parameters of layer n −2, we need to save Jn,n−2 and Jn−1,n−2.
+If we keep going, to calculate the gradient of the hidden units of layer n w.r.t the parameters of the
+first layer, we need to save Jn,1, Jn−1,1, Jn−2,1, . . . , J2,1.
+C.6
+Implementing RTRL within the reverse-mode automatic differentiation
+For a function f : Rn →Rm, we have the Jacobian ∂f(x) ∈Rm×n and we can calculate this
+Jacobian in two ways: forward-mode or reverse-mode differentiation. In the forward-mode differ-
+entiation, the chain rule is applied to each operation while traversing the computational graph in
+the forward pass [2]. While computing the derivatives during the forward pass is appealing, we
+need to do n forward passes to get the full Jacobian, where each forward pass would allow us to
+compute the derivative w.r.t only one of the inputs. i.e., with forward mode differentiation, we
+evaluate the Jacobian one column at a time. As a result, forward-mode differentiation is inefficient
+for neural networks; neural networks map from learnable parameters, which can be in millions, to a
+loss function, hence, have very wide jacobians, n ≫m.
+Reverse-mode differentiation, on the other hand, offers a more efficient approach. It allows us to
+evaluate the Jacobian one row at a time, which is particularly advantageous for neural networks. This
+efficiency comes at the cost of two passes through the network: a forward pass for function evaluation
+and a backward pass for derivative evaluation [2].
+RTRL is an instance of forward-mode differentiation; during the forward pass, the gradient infor-
+mation is evaluated along with the recurrent function computation. As a result, there is no need to
+perform a backward pass for the recurrent component. To efficiently use a recurrent layer with RTRL
+within a larger neural network, we combine RTRL for the recurrent layer with the reverse mode for
+the rest of the network. We use a stop gradient operation on the recurrent layer hidden state and do a
+normal reverse-mode differentiation. Due to the stop gradient operation, the gradient from the reverse
+mode assumes no time dependencies between the recurrent states. We then use the gradient traces
+calculated during the forward pass of the recurrent layer to correct the gradient from the reverse mode
+and account for the time dependencies between the recurrent states [3]. 3
+D
+Issues with Two Alternative Parameterizations
+In this section we provide a few additional insights on alternative ways to handle complex numbers
+within an RNN, and why they are not preferable.
+D.1
+Stability
+We look at the gradient when using each complex representation to understand how different repre-
+sentations affect learning stability. Since each hidden unit has only one recurrent relation in diagonal
+RNNs, it is sufficient to consider one unit, in isolation. To keep the below intuition simple, we also
+omit the input of x, and consider
+ht = λht−1 = . . . = λth0
+(41)
+where h0 is the initial hidden state.
+Real Representation a + bi: Substituting λ in (41) with the real representation, we get:
+ht = (a + bi)th0 = h0
+t
+X
+k=0
+t
+k
+
+at−kbkik
+3This can be implemented by defining a custom vjp for the recurrent layer, which modifies the backward
+pass for the recurrent layer to include the gradient traces.
+23
+Then it follows that the gradient w.r.t the learnable parameters a and b is:
+∂ht
+∂a = h0
+t
+X
+k=0
+t
+k
+
+(t −k)at−k−1bkik
+∂ht
+∂b = h0
+t
+X
+k=0
+t
+k
+
+kat−kbk−1ik
+To prevent the gradient from vanishing/exploding, we need to restrict both |a| and |b| to be ∈(0, 1].
+Exponential Representation r exp(iθ): Substituting λ in (41) with the exponential representation,
+we get:
+ht = rtexp(itθ)h0
+and the gradient w.r.t the learnable parameters r and θ is:
+∂ht
+∂r = trt−1exp(itθ)h0,
+∂ht
+∂θ = rtexp(itθ)ith0
+To prevent the gradient from vanishing/exploding, we need to restrict r ∈(0, 1].
+Cosine Representation r(cos(θ) + i sin(θ)): Substituting λ in (41) with the cosine representation,
+we get:
+ht = rt(cos(tθ) + i sin(tθ))h0
+and the gradient w.r.t the learnable parameters r and θ is:
+∂ht
+∂r = trt−1(cos(tθ) + i sin(tθ))h0
+∂ht
+∂θ = rt(it cos(tθ) −t sin tθ)h0.
+To prevent the gradient from vanishing/exploding, we need to restrict r ∈(0, 1]. It is simpler to
+maintain stability with the exponential and cosine representations, since we only need to constrain
+r ∈(0, 1]. , whereas the real representation requires us to restrict both the complex number’s
+magnitude and phase.
+D.2
+Biased gradient when only using the real part of the hidden state
+We can attempt to get the benefits of having a real-valued hidden state by simply converting the
+complex-valued state to a real-valued one within the LRU. However, taking only the real part results
+in a biased gradient, as we show in this section.
+Consider again the one recurrent unit example, but now also consider the output obtained by taking
+only the real part of the recurrent state: yt = wRe{ht}, where w is a learnable parameter. The
+gradient w.r.t r and θ is:
+∂yt
+∂r = w
+
+cos(θ)ht−1 + r cos(θ)∂ht−1
+∂r
+
+∂yt
+∂θ = w
+
+−r sin(θ)ht−1 + r cos(θ)∂ht−1
+∂θ
+
+(42)
+Multiplying by a complex number z is equivalent to a rotation by the matrix
+
+Re{z}
+−Img{z}
+Img{z}
+Re{z}
+
+and a scale by
+q
+Re{z}2 + Img{z}2. We re-write the recurrent unit using this property as:
+hc1
+t = r cos(θ)hc1
+t−1 −r sin(θ)hc2
+t−1
+hc2
+t = r cos(θ)hc2
+t−1 + r sin(θ)hc1
+t−1
+yt = w(hc1
+t + hc2
+t )
+(43)
+24
+Notice that we don’t need to take the real part of the recurrent state in this formulation. We now write
+the gradient using this new formulation:
+∂yt
+∂r = w(r cos(θ)(hc1
+t−1 + hc2
+t−1) + r cos(θ)(∂hc1
+t−1
+∂r
++ ∂hc2
+t−1
+∂r
+)
++ r sin(θ)(hc1
+t−1 −hc2
+t−1) + r sin(θ)(∂hc1
+t−1
+∂r
+−∂hc2
+t−1
+∂r
+))
+∂yt
+∂θ = w(−r sin(θ)(hc1
+t−1 + hc2
+t−1) + r cos(θ)(∂hc1
+t−1
+∂θ
++ ∂hc2
+t−1
+∂θ
+)
++ r cos(θ)(hc1
+t−1 −hc2
+t−1) + r sin(θ)(∂hc1
+t−1
+∂θ
+−∂hc2
+t−1
+∂θ
+))
+(44)
+Comparing Eq. 44 and Eq. 42, we can see that using only the real part of the recurrent state leads to a
+loss of information in the gradient.
+E
+Trace Conditioning Experiments
+In animal learning, Trace conditioning is a type of experiment where animals predict the occurrence
+of a stimulus (e.g., food), based on the occurrence of another stimulus like a tone. There is no prior
+connection between the two stimuli. However, after enough repetitions of pairing them together—
+playing the tone and then serving the food—the animal learns to anticipate food arrival when it hears
+the tone [35]. We use an open-source trace conditioning benchmark introduced in prior work [38].
+Two signals appear sequentially: the Conditional Stimulus (CS) and the Unconditional Stimulus
+(US). The CS is the trigger signal, similar to the tone, and the US is the signal of interest and appears
+several time steps after the CS, similar to the food. The agent also observes several distractor signals
+which are uncorrelated with the CS and US; the agent must learn ignore them and focus only on
+predicting the US.
+The agent’s objective is to predict the onset of the US, which we model as a prediction of the
+discounted sum of the future US, Gt:
+Gt .=
+∞
+X
+k=0
+γkUSt+k+1,
+(45)
+where γ is a discount factor determining the prediction horizon. This problem is challenging because
+the CS appears, then disappears, and sometime later the US appears; the agent must construct an
+internal state that represents the time period between the two signals.
+E.1
+Additional Trace Conditioning Experiments
+Comparison to Other RTRL-based Architectures: We now compare RTUs to other RTRL-based
+approaches with similar architectures: an online version of LRU [47] and a vanilla block diagonal
+RNN. The block diagonal is a recurrent formulation similar to RTU but ignores the relation between
+the learnable parameters. i.e., replaces ck in 3.2 with ck =
+h
+ak
+bk
+ck
+dk
+i
+.
+The results in figure E.1 indicate that these seemingly small differences between the diagonal RNNs
+can result in significantly different behavior. RTUs outperform online LRUs, with the differences
+discussed in-depth in Section 3.4. RTUs also outperform the block diagonal RNN. We emphasized
+using real-valued diagonals implicitly assumes symmetric matrices, but that is for a single real-value.
+This block diagonal has more representational capacity than the RTU. This result suggests it is
+beneficial for learning to enforce these constraints on the learnable parameters, that they correspond
+to the rotational representation of complex numbers.
+On the role of RTRL in RTUs: We investigated the importance of using RTRL rather than T-BPTT
+for RTUs. We found that RTUs with T-BPTT perform similarly to LRUs with T-BPTT. With a
+sufficiently large truncation, performance eventually matched that of RTRL, but with significantly
+more computation. See Appendix E.1 for the results.
+To highlight the role of RTRL in RTUs, we evaluated the performance of both linear and non-linear
+RTUs with T-BPTT. In this experiment, we all agents use the same number of parameters; the only
+difference is whether they use RTRL or BPTT.
+25
+4K
+8K
+64K
+Number of Parameters
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+MSRE
+Block Diagonal
+Linear RTUs
+Online LRU
+15
+30
+60
+120
+Truncation Length
+0.05
+0.10
+0.15
+0.20
+0.25
+MSRE
+Evaluating T-BPTT in RTUs
+Linear RTUs w. RTRL
+Linear RTUs w. T-BPTT
+NonLinear RTUs w. T-BPTT
+LRU
+Figure 11: Evaluating RTUs with BPTT.
+Figure E.1 summarises the results of this experiment. We can see that the performance of T-BPTT
+approaches the performance of RTRL as the truncation length increases to cover the whole context of
+the task.
+E.2
+Trace Conditioning Experiments Details
+All agents have one recurrent layer, either an RTU or a GRU, and one linear layer. At each time
+step t, the agent passes the observation ot to the recurrent layer, which outputs the recurrent state,
+the agent state. The recurrent state is then passed to the linear layer generating the prediction.
+For each agent, we swept over the learning rate α used to update the network parameters, α ∈
+{10−1, 10−2, 10−3, 10−4, 10−5, 10−6}, and averaged the performance for each learning rate over
+5 independent runs. We then selected the best-performing learning rate for each agent and ran 30
+independent runs using it. For all the experiments, we ran the agents for 2 million steps, and the
+performance was the mean squared prediction error averaged over the 2 million steps.
+E.3
+Learning Rate Sensitivity
+We show the learning rate sensitivity for all agents in the animal learning benchmark.
+F
+Integrating Linear RTRL Methods with PPO
+When performing batch updates, as with PPO, the RTRL gradients used to update the recurrent
+parameters will be stale, as they were calculated during the interaction with the environment w.r.t
+old policy and value parameters. One solution to mitigate the gradient staleness is to go through the
+whole trajectory after each epoch update and re-compute the gradient traces. However, this can be
+26
+0.1
+0.01
+0.001
+0.0001
+1e-05
+1e-06
+Learning Rate
+0.5
+1.0
+1.5
+2.0
+2.5
+3.0
+MSRE 
+ (5 runs)
+GRU in Learning w. Computational 
+ Constraints
+(H:T)13:15
+(H:T)8:30
+(H:T)5:60
+0.1
+0.01
+0.001
+0.0001
+1e-05
+1e-06
+Learning Rate
+0.5
+1.0
+1.5
+2.0
+2.5
+3.0
+GRU in Scaling w. Computation 
+ Option 1
+(H:T)13:15)
+(H:T)13:30)
+(H:T)13:60)
+0.01
+0.001
+0.0001
+1e-05
+1e-06
+Learning Rate
+0.2
+0.4
+0.6
+0.8
+1.0
+GRU in Scaling w. Computation 
+ Option 2
+(H:T) 2:45
+(H:T) 3:45
+(H:T) 5:45
+(H:T) 8:45
+(H:T) 13:45
+(H:T) 20:45
+(H:T) 30:45
+0.01
+0.001
+0.0001
+1e-05
+1e-06
+Learning Rate
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+GRU in Scaling w. Parameters
+(H:T) 20:45
+(H:T) 30:45
+(H:T) 48:45
+(H:T) 67:45
+(H:T) 97:45
+(H:T) 140:45
+(H:T) 200:45
+Figure 12: GRUs used in the animal learning benchmark. The (H: T) in the label refers to the (hidden
+dimension: truncation length) for the GRU.
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+Learning Rate
+0.16
+0.18
+0.20
+0.22
+0.24
+0.26
+MSRE 
+ (5 runs)
+LRU in Learning w. Computational 
+ Constraints
+(H:T)22:15
+(H:T)10:30
+(H:T)6:60
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+Learning Rate
+0.15
+0.20
+0.25
+0.30
+0.35
+LRU in Scaling w. Computation 
+ Option 1
+(H:T)22,10:15)
+(H:T)22,10:30)
+(H:T)22,10:60)
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+Learning Rate
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+0.35
+0.40
+LRU in Scaling w. Computation 
+ Option 2
+(H:T) 2:45
+(H:T) 3:45
+(H:T) 5:45
+(H:T) 10:45
+(H:T) 20:45
+(H:T) 40:45
+(H:T) 80:45
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+Learning Rate
+0.05
+0.10
+0.15
+0.20
+0.25
+LRU in Scaling w. Parameters
+(H:T) 40:45
+(H:T) 80:45
+(H:T) 160:45
+(H:T) 320:45
+(H:T) 640:45
+(H:T) 1290:45
+(H:T) 2560:45
+Figure 13: LRUs used in the animal learning benchmark. The (H: T) in the label refers to the (hidden
+dimension: truncation length) for the GRU.
+-8
+-9
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+log2 (Learning Rate)
+0.00
+0.05
+0.10
+0.15
+0.20
+MSRE 
+ (5 runs)
+RTUs in Learning w. Computational 
+ Constraints
+Linear RTU:550
+NonLinear RTU:550
+-8
+-9
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+log2 (Learning Rate)
+0.00
+0.05
+0.10
+0.15
+0.20
+Linear RTUs in Scaling w. Computation 
+ Option 1
+Linear RTUs:550
+Linear RTUs:1110
+Linear RTUs:2220
+-8
+-9
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+log2 (Learning Rate)
+0.00
+0.05
+0.10
+0.15
+0.20
+NonLinear RTUs in Scaling w. Computation 
+ Option 1
+NonLinear RTUs:550
+NonLinear RTUs:1110
+NonLinear RTUs:2220
+Figure 14: RTUs used in the animal learning benchmark.
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+log2 (Learning Rate)
+0.00
+0.05
+0.10
+0.15
+0.20
+MSRE 
+ (5 runs)
+Linear RTUs in in Scaling w. Computation 
+ Option 2
+h: 160
+h: 230
+h: 450
+h: 800
+h: 1650
+h: 3200
+h: 6100
+-9
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+log2 (Learning Rate)
+0.00
+0.05
+0.10
+0.15
+0.20
+NonLinear RTUs in in Scaling w. Computation
+ Option 2
+h: 160
+h: 230
+h: 450
+h: 800
+h: 1650
+h: 3200
+h: 6100
+Figure 15: RTUs used in the animal learning benchmark.
+computationally expensive. Algorithm 1, we provide the pseudocode for integrating RTRL methods
+with PPO with optional steps for re-running the network to update the RTRL gradient traces, the
+value targets, and the advantage estimates.
+In the next experiment, we investigate the effect of the gradient staleness in RTRL when combined
+with PPO and how this staleness interacts with the targets and advantage estimates. To understand this
+interaction, we evaluate all combinations of stale gradient and stale targets with increasing the number
+of epoch updates. We perform this analysis on the Ant-P environment from the Mujoco POMDP
+benchmark [30, 11, 26, 31]. Surprisingly, Figure 17 shows that using a stale gradient results in better
+27
+-9
+-10
+-11
+-12
+-13
+-14
+-15
+-16
+-17
+-18
+log2 (Learning Rate)
+0.00
+0.05
+0.10
+0.15
+0.20
+MSRE 
+ (5 runs)
+Linear RTUs in Scaling w. Parameters
+h:80
+h:160
+h:300
+h:600
+h:1150
+h:2300
+h:4600
+-8
+-9
+-10
+-11
+-12
+-13
+-14
+-15
+log2 (Learning Rate)
+0.00
+0.05
+0.10
+0.15
+0.20NonLinear RTUs in Scaling w. Parameters
+h: 80
+h: 160
+h: 300
+h: 600
+h: 1150
+h: 2300
+h: 4600
+Figure 16: RTUs used in the animal learning benchmark.
+Figure 17: The impact of stale gradients and stale targets when combining RTRL and PPO on Ant.
+performance with RTUs than re-computing the gradient traces. This performance improvement is
+also consistent when we increase the number of epochs from 4 to 8. It also shows that re-computing
+the value targets and advantage estimates has a minimal effect on the performance. We repeated the
+same experiments for NonLinear RTUs and Online LRU in Appendix F with consistent results.
+One hypothesis for the superior performance of stale gradients is that the staleness is helping PPO
+maintain the trust region. We investigate this hypothesis by measuring the KL divergence between
+the policy used to collect the trajectory and the most recent policy. We use the following estimate for
+the KL divergence between the two policies as (r −1) −log(r), where r = (πθnew)/(πθold). The
+rightmost subplot of Figure 17 shows that at the beginning of learning, agents with stale gradients
+move away from the old policy more slowly than agents with fresh gradients; perhaps stale gradients
+helo maintaining the trust region.
+Figure 18: (a) Approximate KL divergence for NonLinear RTU with 4 epochs.(b) Approximate KL
+divergence for NonLinear RTU with 8 epochs.
+28
+Figure 19: (a) Approximate KL divergence for LRU with 4 epochs.(b) Approximate KL divergence
+for LRU with 8 epochs.
+Algorithm 1 Pseudocode for integrating RTRL methods with PPO
+Inputs: a differentiable policy parametrization π(a|s, Wp).
+Inputs: a differentiable state-value function parametrization ˆv(s, Wv).
+loop
+Generate a trajectory using the current policy O0, A0, R1, . . . , OM, AM, RM,
+Store the transition and the gradient traces for the recurrent components along the way for
+i = 0, . . . , M
+Compute the advantage estimates and the target value for each timestep t
+for epoch = 1, ..., k do
+Divide the trajectory into minibatches and shuffle them.
+for minibatch = 1, ..., m do
+Calculate PPO loss
+Perform a gradient step with AutoDiff and correct it with the RTRL saved gradient as
+discussed in C.6.
+end for
+[Optional] Re-run network to update hidden states and the gradient traces for the trajectory.
+[Optional] Update value targets and advantages estimates for the trajectory.
+end for
+end loop
+G
+Memory-Based Control Experiments
+In our implementations, we use a shared representation learning network followed by two MLPs
+for the actor and the critic heads, as illustrated in Figure 20. The shared representations consist of
+a feedforward layer with 64 hidden units and memory components: an RTU, LRU, or a GRU. The
+actor and the critic’s heads consist of two feedforward layers with tanh activation function.
+Additional Mujoco Results:
+In Figures 21 and 22, we set the truncation length for GRU and LRU to be 64, which is larger than
+needed to solve the Mujoco POMDP tasks. These results show that even when the truncation length
+is larger than needed, RTUs still outperform T-BPTT baselines. We also show that the transformer-
+based models, GPT2, perform worse than RNN-based models. This is consistent with previous work
+suggesting that transformers might not be suitable for RL tasks [31].
+Learning Rate Sensitivity:
+29
+Figure 20: Agents architectures used in our control experiments.
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+1000
+0
+1000
+2000
+3000
+4000
+5000
+Undiscounted 
+Return 
+(30 runs)
+Ant-P
+GRU
+LRU
+Linear RTU
+NonLinear RTU
+GPT
+Online LRU
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+200
+400
+600
+800
+1000
+1200
+Walker-P
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+200
+400
+600
+800
+1000
+1200
+1400
+Hopper-P
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+0
+1000
+2000
+3000
+4000
+Cheetah-P
+Figure 21: Additional results on Mujoco-P, where we allow GRU and LRU to use a larger truncation
+length than needed to solve these tasks. We also show results for GPT2.
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+0
+1000
+2000
+3000
+4000
+Undiscounted 
+Return 
+(5 runs)
+Ant-P
+LRU, T=4
+LRU, T=64
+Online LRU
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+1000
+1500
+2000
+2500
+3000
+3500
+Cheetah-P
+LRU, T=4
+LRU, T=64
+Online LRU
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+400
+500
+600
+700
+800
+900
+1000
+Walker-P
+LRU, T=4
+LRU, T=64
+Online LRU
+0.000001
+0.000003
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+400
+600
+800
+1000
+1200
+Hopper-P
+LRU, T=4
+LRU, T=64
+Online LRU
+Figure 23: Learning rate sweep for LRU in the control experiments.
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+0
+1000
+2000
+3000
+4000
+Undiscounted 
+Return 
+(5 runs)
+Ant-P
+Linear RTU
+NonLinear RTU
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+1500
+2000
+2500
+3000
+Cheetah-P
+Linear RTU
+NonLinear RTU
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+600
+700
+800
+900
+1000
+1100
+Walker-P
+Linear RTU
+NonLinear RTU
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+800
+900
+1000
+1100
+1200
+1300
+Hopper-P
+Linear RTU
+NonLinear RTU
+Figure 24: Learning rate sweep for RTUs in the control experiments.
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+0
+1000
+2000
+3000
+4000
+Undiscounted 
+Return 
+(5 runs)
+Ant-P
+GRU, T=4
+GRU, T=64
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+1000
+1500
+2000
+2500
+3000
+3500
+4000
+Cheetah-P
+GRU, T=4
+GRU, T=64
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+500
+600
+700
+Walker-P
+GRU, T=4
+GRU, T=64
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+700
+800
+900
+1000
+1100
+1200
+Hopper-P
+GRU, T=4
+GRU, T=64
+Figure 25: Learning rate sweep for GRUs in the control experiments.
+30
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+1000
+0
+1000
+2000
+3000
+4000
+5000
+ Undiscounted 
+ Return 
+ (30 runs)
+Ant-V
+LRU
+GRU
+Linear RTU
+NonLinear RTU
+Online LRU
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+200
+300
+400
+500
+600
+700
+Walker-V
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+200
+400
+600
+800
+1000
+1200
+Hopper-V
+0
+1
+2
+3
+4
+5
+Env Steps
+1e6
+500
+0
+500
+1000
+1500
+2000
+2500
+Cheetah-V
+Figure 22: Additional results on Mujoco-P, where we allow GRU and LRU to use a larger truncation
+length than needed to solve these tasks.
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+750
+500
+250
+0
+250
+500
+750
+Undiscounted 
+Return 
+(30 runs)
+Ant-P
+GPT2, T=64, h=128
+GPT2, T=1024, h=768
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+300
+200
+100
+0
+100
+200
+300
+Cheetah-P
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+200
+250
+300
+Walker-P
+0.00001
+0.00003
+0.0001
+0.0003
+0.001
+Learning rate
+100
+200
+300
+400
+500
+Hopper-P
+Figure 26: Learning rate sweep for GPT in the control experiments.
+Figures 23, 24, 25, and 26 show the learning rate sensitivity for all agents in the Mujoco POMDP
+benchmark.
+Finally, we used the default hyper-parameters for PPO [39] indicated in Table 1 for all agents.
+Name
+Value
+Buffer size
+2048
+Num epochs
+10
+Number of Mini-batches
+32
+GAE,λ
+0.95
+Discount factor, γ
+0.99
+policy clip parameter
+0.2
+Value loss clip parameter
+0.5
+Gradient clip parameter
+0.5
+Optimizer
+Adam
+Optimizer step size
+[1e −05, 3e −05, 1e −04, 3e −04, 1e −03]
+Table 1: Hyper Parameters for PPO.
+H
+Compute resources
+We ran the Mujoco-P, Mujoco-V on NVIDIA P100 GPU. Each of the Mujoco-P and Mujoco-V trials
+took around 30 minutes to complete on a single GPU. For the POPGym experiments and animal
+learning experiments, we used a large CPU cluster. Each trial of the POPGym experiments took
+around 2 hours to complete. While each run of animal learning took around 15 minutes to complete
+on a single CPU with memory less than 1 GB.
+31
+
