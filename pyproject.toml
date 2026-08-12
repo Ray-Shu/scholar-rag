@@ -7,7 +7,9 @@ dependencies = [
     "dotenv",
     "pandas",
     "scikit-learn",
-    "pymupdf"
+    "pymupdf",
+    "pymupdf4llm",
+    "langchain-text-splitters>0.3.0"
 ]
 
 [build-system]

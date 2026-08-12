@@ -17,3 +17,5 @@ __pycache__/
 # ide / os_files
 .vscode/
 .DS_Store
+
+output/
