@@ -8,18 +8,27 @@ CWD = Path.cwd() / "src/scholar_rag"
 PAPERS_FOLDER = CWD / "papers"
 OUTPUT_FOLDER = CWD / "output"
 
-if __name__ == "__main__": 
-    md = pymupdf4llm.to_markdown(PAPERS_FOLDER / "rtu.pdf")
+def parse_to_markdown(doc_name:str, doc_type:str): 
+    """
+    Parses a pdf document to markdown given a document name and type. 
+    Ex: 
+        doc_name = 'paper' 
+        doc_type = 'pdf'
+    """
+    doc_file = doc_name + "." + doc_type
+    md = pymupdf4llm.to_markdown(PAPERS_FOLDER / doc_file)
 
-    document = fixed_size_chunking(md)
-
-    with open(OUTPUT_FOLDER / "output_text.txt", "wb") as out_text: 
-        out_text.write(document)
-    out_text.close()
+    return md 
 
 
+# if __name__ == "__main__": 
+#     md = pymupdf4llm.to_markdown(PAPERS_FOLDER / "rtu.pdf")
 
+#     document = fixed_size_chunking(md)
 
+#     with open(OUTPUT_FOLDER / "output_text.txt", "wb") as out_text: 
+#         out_text.write(document)
+#     out_text.close()
 
 
     # with open(OUTPUT_FOLDER / "output_text.txt", "wb") as out_text: 
