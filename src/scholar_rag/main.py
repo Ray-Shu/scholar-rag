@@ -1,51 +1,64 @@
 import os 
+from pathlib import Path
 from dotenv import load_dotenv 
 
 from google import genai 
 from google.genai import types 
 
-# vector db 
-import faiss 
+from transformers.models import ColPaliProcessor
+from transformers.models import ColQwen2PreTrainedModel
+from transformers.utils.import_utils import is_flash_attn_2_available 
 
+import torch
 import numpy as np
-import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity 
+import pymupdf
+import qdrant_client
+from PIL import Image
 
-from scholar_rag.utils import chunking 
-from scholar_rag.utils import parse_docs 
-from scholar_rag.utils import embed
-
+# -- GLOBALS -- # 
+CWD = Path.cwd() / "src/scholar_rag"
+PAPERS_FOLDER = CWD / "papers"
 
 DOC_NAME = "grouped-query-attention"
-DOC_TYPE = "pdf"
+DOC = DOC_NAME + ".pdf"
 
 EMBEDDING_DIM = 768
 
+MODEL_NAME = "vidore/colqwen2-v1.0"
+
+DEVICE = "mps"
+
 def main(): 
-    # parse document to markdown format
-    document = parse_docs.parse_to_markdown(doc_name=DOC_NAME, doc_type=DOC_TYPE)
+    model = ColQwen2PreTrainedModel.from_pretrained( 
+        MODEL_NAME, 
+        torch_dtype = torch.bfloat16,
+        device_map = DEVICE, 
+        attn_implementation = "flash_attention_2" if is_flash_attn_2_available else None
+    ).eval()
 
-    # chunk document
-    chunked_doc = chunking.fixed_size_chunking(document)
-    print(chunked_doc[3])
+    print(model)
 
-    # create embedding vectors
-    #embeddings = embed.create_embeddings(chunked_doc, embedding_dim=EMBEDDING_DIM)
+    # document = pymupdf.open(filename=PAPERS_FOLDER / DOC)
 
-    # store embedding vectors 
-    
+    # image_batch = [] 
+    # metadata_batch = []
+    # for page_num, page in enumerate(document): 
+    #     pix = page.get_pixmap(dpi=150)
+    #     page_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
+    #     image_batch.append(page_img)
+    #     metadata_batch.append(
+    #         {
+    #             "document": DOC_NAME,
+    #             "page_number": page_num
+    #         }
+    #     )
 
     
 
 if __name__ == "__main__": 
     load_dotenv() # loads env vars 
     main() 
-
-    #client = genai.Client()
-    #semantic_example(client) 
-    #controlling_embedding_size_example(client)
-
     
 
 

@@ -4,21 +4,21 @@ version = "0.0.0"
 requires-python = ">=3.11, <3.12"
 dependencies = [
     "google-genai", 
-    "dotenv",
+    "python-dotenv",
     "pandas",
     "numpy",
     "scikit-learn",
     "pymupdf",
-    "pymupdf4llm",
-    "langchain-text-splitters>0.3.0",
-    "faiss-cpu",
+    "pillow",
+    "torch<=2.5.1",
+    "transformers",
+    "accelerate",
+    "qdrant-client",
     "ipykernel"
 ]
 
 [project.optional.dependencies]
-cuda = [
-    "faiss-gpu"
-]
+cuda = ["https://download.pytorch.org/whl/cu128"]
 
 [build-system]
 requires = ["hatchling"]
