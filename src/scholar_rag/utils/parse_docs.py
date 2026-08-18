@@ -2,6 +2,8 @@ import pymupdf
 import pymupdf4llm
 from pathlib import Path
 
+from scholar_rag.utils.chunking import fixed_size_chunking
+
 CWD = Path.cwd() / "src/scholar_rag"
 PAPERS_FOLDER = CWD / "papers"
 OUTPUT_FOLDER = CWD / "output"

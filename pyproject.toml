@@ -10,15 +10,22 @@ dependencies = [
     "scikit-learn",
     "pymupdf",
     "pillow",
-    "torch<=2.5.1",
+    "torch>=2.7.0",
     "transformers",
     "accelerate",
     "qdrant-client",
     "ipykernel"
 ]
 
-[project.optional.dependencies]
-cuda = ["https://download.pytorch.org/whl/cu128"]
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 
 [build-system]
 requires = ["hatchling"]
