@@ -34,7 +34,7 @@ def embed_input(model, processor, input_type, input):
         input: An individual or batched input. 
 
     Returns: 
-        embeddings: The embedded vector of the image.
+        embeddings: The embedded vector of the input.
     """ 
 
     if input_type == "image": 
@@ -44,7 +44,7 @@ def embed_input(model, processor, input_type, input):
     elif input_type == "query": 
         processed_queries = processor.process_queries(input).to(model.device)
         with torch.no_grad(): 
-            out = model(**processed_queries)  # torch.Size([BATCH_SIZE, 747, 128])
+            out = model(**processed_queries)
     else: 
         assert ValueError(f"Invalid input type {input_type}.")
 

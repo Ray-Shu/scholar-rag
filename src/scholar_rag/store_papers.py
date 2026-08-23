@@ -17,6 +17,7 @@ from PIL import Image
 
 # -- GLOBALS -- # 
 PAPERS_FOLDER = Path(__file__).resolve().parent / "papers"
+STORAGE_PATH = Path.cwd() / "storage"
 
 COLLECTION_NAME = "papers"
 
@@ -31,7 +32,8 @@ DEVICE = "cuda"
 
 
 def main(): 
-    client = qdrant_utils.create_qdrant_client(path="./qdrant_data", collection_name=COLLECTION_NAME, embedding_size=EMBEDDING_SIZE)
+    client = qdrant_utils.get_client(path="./qdrant_data")
+    qdrant_utils.create_collection(client=client, collection_name=COLLECTION_NAME, embedding_size=EMBEDDING_SIZE)
     model, processor = vlm_utils.create_colqwen_model_and_processor(DEVICE, MODEL_NAME)
 
     points_id = 0
@@ -47,14 +49,24 @@ def main():
         document = pymupdf.open(filename=PAPERS_FOLDER / papers.name) 
 
         for page_num, page in enumerate(document):  # iterate over document pages 
+            # create image of the page 
             pix = page.get_pixmap(dpi=150)
             page_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
+            # saving paper .pngs onto local disk
+            paper_name = papers.name[:-4]
+            folder_path = STORAGE_PATH / paper_name 
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path) 
+            page_img.save(folder_path / f"{page_num}.png")
+
+            # batching 
             image_batch.append(page_img)
             metadata_batch.append(
                 {
-                    "document": papers.name[:-4],
-                    "page_number": page_num
+                    "document": paper_name,
+                    "page_number": page_num,
+                    "image_path": folder_path / f"{page_num}.png"
                 }
             )
 
