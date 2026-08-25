@@ -9,7 +9,7 @@ from google import genai
 
 COLLECTION_NAME = "papers"
 MODEL_NAME = "vidore/colqwen2-v1.0-hf"
-DEVICE = "cuda"
+DEVICE = vlm_utils.get_device()
 
 def main(): 
     test_query = "What is an RTU?" 
