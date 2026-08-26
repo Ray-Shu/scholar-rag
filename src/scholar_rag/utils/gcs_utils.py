@@ -2,31 +2,52 @@
 A collection of functions dedicated to utilities for Google Cloud Storage.
 """
 
-from google.cloud.storage import Client, transfer_manager
+from google.cloud.storage import transfer_manager
+from google.api_core.exceptions import PreconditionFailed
 from pathlib import Path
 from dotenv import load_dotenv 
 
-def upload_many_blob_from_memory(transfer_manager, file_blob_pairs):
+def upload_blob_from_disk(bucket, source_file_name, destination_blob_name):
+    """
+    Uploads a file object to GCS from local disk (NOT from memory). 
+    """
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_filename(source_file_name)
+
+def upload_many_blob_from_memory(storage_client, file_blob_pairs):
     """
     Uploads a list of contents concurrently for optimized upload speed. 
 
     Args: 
-        
+        transfer_manager: The GCS transfer_manager object 
+        storage_client: The GCS Client object  
+        file_blob_pairs: A list of tuples of a file (or filename) and blob object. The file can be an IOBase class or str. 
     """
-
-    transfer_manager.upload_many(
+    results = transfer_manager.upload_many(
         file_blob_pairs=file_blob_pairs,
         skip_if_exists=True, 
         worker_type=transfer_manager.THREAD
     )
+
+    actual_failures = [
+        r for r in results
+        if isinstance(r, Exception) and not isinstance(r, PreconditionFailed)
+    ]
+
+    assert not actual_failures, f"Upload had unexpected failures: {actual_failures}"
     
 
-def delete_blob(storage_client, bucket_name, blob_name): 
+def delete_blob(bucket, blob_name): 
+    blob = bucket.blob(blob_name)
+    blob.delete()
+
+
+if __name__ == "__main__": 
+    load_dotenv() # loads env vars 
 
 
 
-
-# if __name__ == "__main__": 
-#     load_dotenv() # loads env vars 
-#     source_dir = Path("./data")
-#     upload_blob("scholar-rag-papers-bucket", source_file_name="storage/rtu/1.webp", destination_blob_name="hi")
+    # client = Client()
+    # bucket = client.bucket("scholar-rag-papers-bucket")
+    # source_dir = Path("./data")
+    # delete_blob(bucket, blob_name="bye")

@@ -1,28 +1,39 @@
 import os 
+import io
 from pathlib import Path
 from dotenv import load_dotenv 
 
 from qdrant_client.models import PointStruct
 
+from google.cloud.storage import Client
+
 import scholar_rag.utils.qdrant_utils as qdrant_utils
 import scholar_rag.utils.vlm_utils as vlm_utils
 import scholar_rag.utils.local_utils as local_utils
+import scholar_rag.utils.gcs_utils as gcs_utils
 
 import pymupdf
 from PIL import Image
 
 PAPERS_FOLDER = Path(__file__).resolve().parent / "papers"
-
 COLLECTION_NAME = "papers"
+GCS_BUCKET_NAME = "scholar-rag-papers-bucket"
+IMAGE_FORMAT = "webp"
 
 BATCH_SIZE = 8
-
 MODEL_NAME = "vidore/colqwen2-v1.0-hf"
 EMBEDDING_SIZE = 128 # from colpali's documentation
 
+SAVE_LOCAL = True
+SAVE_CLOUD = True 
 DEVICE = vlm_utils.get_device()
 
 def main(): 
+    assert PAPERS_FOLDER.exists(), f"Folder {PAPERS_FOLDER} doesn't exist."
+
+    storage_client = Client() 
+    bucket = storage_client.bucket(bucket_name=GCS_BUCKET_NAME)
+
     client = qdrant_utils.get_client(path="./qdrant_data")
     qdrant_utils.create_collection(client=client, collection_name=COLLECTION_NAME, embedding_size=EMBEDDING_SIZE)
     model, processor = vlm_utils.create_colqwen_model_and_processor(DEVICE, MODEL_NAME)
@@ -30,33 +41,39 @@ def main():
     points_id = 0
     image_batch = [] 
     metadata_batch = []
-
-    if not PAPERS_FOLDER.exists():
-       print(f"Folder {PAPERS_FOLDER} doesn't exist.") 
-       return
+    file_blob_pairs = [] 
 
     # iterate over documents 
     for papers in PAPERS_FOLDER.glob("*.pdf"): 
         document = pymupdf.open(filename=PAPERS_FOLDER / papers.name) 
+        paper_name = papers.name[:-4]
 
         for page_num, page in enumerate(document):  # iterate over document pages 
             # create image of the page 
             pix = page.get_pixmap(dpi=150)
             page_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-            # saving paper .png files onto local disk
-            paper_name = papers.name[:-4]
-            local_utils.store_pages(page_img, paper_name, page_num)
+            relative_image_key = f"{paper_name}/{page_num:03d}.{IMAGE_FORMAT}"
 
+            # saving paper .png files onto local disk
+            if SAVE_LOCAL:
+                local_utils.store_pages(page_img, paper_name, relative_image_key, image_format=IMAGE_FORMAT)
+
+            buffer = io.BytesIO()
+            page_img.save(buffer, format=IMAGE_FORMAT)
+            buffer.seek(0)
+            blob = bucket.blob(blob_name=relative_image_key)
+            
             # batching 
             image_batch.append(page_img)
             metadata_batch.append(
                 {
                     "document": paper_name,
                     "page_number": page_num,
-                    "image_path": f"{paper_name}/{page_num}.png"
+                    "relative_image_key": relative_image_key
                 }
             )
+            file_blob_pairs.append((buffer, blob))
 
             if len(image_batch) >= BATCH_SIZE or len(image_batch) >= len(document): 
                 # run embedding logic 
@@ -80,6 +97,8 @@ def main():
 
                 image_batch = []
                 metadata_batch = []
+
+    gcs_utils.upload_many_blob_from_memory(storage_client=storage_client, file_blob_pairs=file_blob_pairs)
                 
 
 if __name__ == "__main__": 

@@ -24,4 +24,6 @@ output/
 
 *.md
 
+# storage related
 storage/
+qdrant_data/
