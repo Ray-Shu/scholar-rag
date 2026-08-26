@@ -18,7 +18,7 @@ def main():
 
     client = qdrant_utils.get_client(path="./qdrant_data")
     result = qdrant_utils.query(client=client, query=embeddings[0], collection_name="papers")
-    print(result.points)
+    print(result.points[0].payload)
 
     # create prompt
     prompt = [
