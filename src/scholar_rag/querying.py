@@ -1,23 +1,26 @@
 import base64
-from pathlib import Path
 from dotenv import load_dotenv 
 
 import scholar_rag.utils.vlm_utils as vlm_utils 
 import scholar_rag.utils.qdrant_utils as qdrant_utils
+import scholar_rag.utils.gcs_utils as gcs_utils
+from scholar_rag import config
 
 from google import genai
+from google.cloud.storage import Client
 
-COLLECTION_NAME = "papers"
-MODEL_NAME = "vidore/colqwen2-v1.0-hf"
 DEVICE = vlm_utils.get_device()
 
 def main(): 
+    storage_client = Client() 
+    bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
+    
     test_query = "What is an RTU?" 
-    model, processor = vlm_utils.create_colqwen_model_and_processor(device=DEVICE, model_name=MODEL_NAME)
+    model, processor = vlm_utils.create_colqwen_model_and_processor(device=DEVICE, model_name=config.MODEL_NAME)
     embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[test_query]) # returns [batch_size, tokens, embed_dim]
 
     client = qdrant_utils.get_client(path="./qdrant_data")
-    result = qdrant_utils.query(client=client, query=embeddings[0], collection_name="papers")
+    result = qdrant_utils.query(client=client, query=embeddings[0], collection_name=config.COLLECTION_NAME)
     print(result.points[0].payload)
 
     # create prompt
@@ -31,20 +34,22 @@ def main():
     ]
 
     for i in range(len(result.points)): 
-        image_path = Path(result.points[i].payload["image_path"])
+        relative_image_key = result.points[i].payload["relative_image_key"]
+        content = gcs_utils.download_blob_into_memory(bucket, blob_name=relative_image_key)
+
         prompt.append( 
             {  
                 "type": "image", 
                 # api expects base64 but needs to serializable so use ascii decode to become string. 
-                "data": base64.b64encode(image_path.read_bytes()).decode("ascii"),
-                "mime_type": "image/png"  # MIME type: multipurpose internet mail extension
+                "data": base64.b64encode(content).decode("ascii"),
+                "mime_type": "image/webp"  # MIME type: multipurpose internet mail extension
             
             }
         )
     
-    client = genai.Client()
-    interaction = client.interactions.create(
-        model="gemini-3.7-flash",
+    gemini_client = genai.Client()
+    interaction = gemini_client.interactions.create(
+        model=config.GENERATION_MODEL,
         input= prompt
     )
 
