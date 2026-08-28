@@ -15,13 +15,12 @@ def main():
     storage_client = Client() 
     bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
     
-    test_query = "What is an RTU?" 
+    test_query = "What is GQA?" 
     model, processor = vlm_utils.create_colqwen_model_and_processor(device=DEVICE, model_name=config.MODEL_NAME)
     embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[test_query]) # returns [batch_size, tokens, embed_dim]
 
-    client = qdrant_utils.get_client(path="./qdrant_data")
+    client = qdrant_utils.get_client()
     result = qdrant_utils.query(client=client, query=embeddings[0], collection_name=config.COLLECTION_NAME)
-    print(result.points[0].payload)
 
     # create prompt
     prompt = [

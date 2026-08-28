@@ -25,7 +25,7 @@ def main():
     storage_client = Client() 
     bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
 
-    client = qdrant_utils.get_client(path="./qdrant_data")
+    client = qdrant_utils.get_client()
     qdrant_utils.create_collection(client=client, collection_name=config.COLLECTION_NAME, embedding_size=config.EMBEDDING_SIZE)
     model, processor = vlm_utils.create_colqwen_model_and_processor(DEVICE, config.MODEL_NAME)
 
@@ -48,7 +48,7 @@ def main():
 
             # saving paper .png files onto local disk
             if config.SAVE_LOCAL:
-                local_utils.store_pages(page_img, paper_name, relative_image_key, image_format=IMAGE_FORMAT)
+                local_utils.store_pages(page_img, paper_name, relative_image_key, image_format=config.IMAGE_FORMAT)
 
             buffer = io.BytesIO()
             page_img.save(buffer, format=config.IMAGE_FORMAT)

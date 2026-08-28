@@ -1,11 +1,17 @@
+import os 
+from dotenv import load_dotenv
+
 import qdrant_client
 from qdrant_client.models import Distance, VectorParams, PointStruct, MultiVectorComparator, MultiVectorConfig
 
-def get_client(path): 
+def get_client(): 
     """
-    Creates a qdrant client.
+    Connects to qdrant cloud and returns a client.
     """
-    client = qdrant_client.QdrantClient(path=path) 
+    client = qdrant_client.QdrantClient(
+        url=os.getenv("QDRANT_URL"),
+        api_key=os.getenv("QDRANT_CLOUD_API_KEY")
+    ) 
     return client
 
 def create_collection(client, collection_name, embedding_size): 
