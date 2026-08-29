@@ -2,7 +2,9 @@ from pathlib import Path
 
 PAPERS_FOLDER = Path(__file__).resolve().parent / "papers"
 COLLECTION_NAME = "papers"
+
 GCS_BUCKET_NAME = "scholar-rag-papers-bucket"
+GCS_RESEARCH_PAPER_FOLDER_NAME = "research-papers"
 IMAGE_FORMAT = "webp"
 
 MODEL_NAME = "vidore/colqwen2-v1.0-hf"
