@@ -7,10 +7,10 @@ from qdrant_client.models import PointStruct
 
 from google.cloud.storage import Client
 
-import scholar_rag.utils.qdrant_utils as qdrant_utils
-import scholar_rag.utils.vlm_utils as vlm_utils
-import scholar_rag.utils.local_utils as local_utils
-import scholar_rag.utils.gcs_utils as gcs_utils
+import scholar_rag.core.utils.qdrant_utils as qdrant_utils
+import scholar_rag.core.utils.vlm_utils as vlm_utils
+import scholar_rag.core.utils.local_utils as local_utils
+import scholar_rag.core.utils.gcs_utils as gcs_utils
 from scholar_rag import config
 
 import pymupdf
