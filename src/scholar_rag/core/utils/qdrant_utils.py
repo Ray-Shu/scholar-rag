@@ -21,8 +21,6 @@ def create_collection(client, collection_name, embedding_size):
         collection_name: The name of the qdrant collection.
         embedding_size: The size of the vector embeddings (axis=-1) stored.
     """
-    if client.collection_exists(collection_name=collection_name):
-        client.delete_collection(collection_name=collection_name)
 
     client.create_collection( 
         collection_name=collection_name,
@@ -55,3 +53,7 @@ def query(client, query, collection_name):
         print(f"Score: {point.score:.3f}")
 
     return result 
+
+def delete_collection(qdrant_client, collection_name): 
+    if qdrant_client.collection_exists(collection_name=collection_name):
+        qdrant_client.delete_collection(collection_name=collection_name)
