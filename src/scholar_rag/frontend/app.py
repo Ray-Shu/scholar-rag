@@ -13,4 +13,3 @@ if st.button("Upload files"):
         )
     else: 
         st.markdown("No files uploaded.")
-         #@ "file": (file.name, file.getvalue(), "application/pdf")

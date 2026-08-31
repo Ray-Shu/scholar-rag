@@ -1,10 +1,8 @@
 import os 
-from dotenv import load_dotenv
-
 import qdrant_client
-from qdrant_client.models import Distance, VectorParams, PointStruct, MultiVectorComparator, MultiVectorConfig
+from qdrant_client.models import Distance, VectorParams, MultiVectorComparator, MultiVectorConfig
 
-def get_client(): 
+def get_client() -> qdrant_client.QdrantClient: 
     """
     Connects to qdrant cloud and returns a client.
     """
