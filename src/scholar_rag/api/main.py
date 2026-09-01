@@ -40,7 +40,7 @@ async def root():
 
 @app.post("/upload")
 async def upload(files: list[UploadFile], background_task: BackgroundTasks):
-    task_id = str(uuid.uuid4) 
+    task_id = str(uuid.uuid4()) 
     app.state.progress[task_id] = {"status": "processing", "progress": 0.0}
 
     file_list = [(file.file.read(), file.filename) for file in files]

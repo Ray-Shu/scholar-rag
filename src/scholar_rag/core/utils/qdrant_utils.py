@@ -21,6 +21,8 @@ def create_collection(client, collection_name, embedding_size):
         collection_name: The name of the qdrant collection.
         embedding_size: The size of the vector embeddings (axis=-1) stored.
     """
+    if client.collection_exists(collection_name):
+        return
 
     client.create_collection( 
         collection_name=collection_name,
