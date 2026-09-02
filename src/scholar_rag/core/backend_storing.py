@@ -122,7 +122,7 @@ def store_and_embed(files: list[tuple[bytes, str]], model, processor, task_id:st
                     metadata_batch = []
 
                 processed_pages += 1
-                percent_processed = processed_pages / total_pages
+                percent_processed = processed_pages / (total_pages + 0.05)
                 progress_dict[task_id]["progress"] = percent_processed
 
 

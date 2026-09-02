@@ -49,7 +49,7 @@ def upload(uploader):
                     status_text.text(f"Processing: {int(data['progress'] * 100)}%")
 
                     if data["status"] == "completed":
-                        st.success("Upload and embedding complete!")
+                        st.success("Files uploaded!")
                         break 
                     elif data["status"] == "failed": 
                         progress_bar.empty()
@@ -57,7 +57,7 @@ def upload(uploader):
                         break
                     elif data["status"] == "not_found":
                         progress_bar.empty()
-                        st.error("Task ID not found.")
+                        st.error("Task ID not found. Could not upload file.")
                 else: 
                     st.error(f"Server responded with error code: {status_result.status_code}")
                     break
