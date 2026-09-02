@@ -11,11 +11,10 @@ from google.cloud.storage import Client
 
 DEVICE = vlm_utils.get_device()
 
-def main(): 
+def query(query:str): 
     storage_client = Client() 
     bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
     
-    test_query = "What is GQA?" 
     model, processor = vlm_utils.create_colqwen_model_and_processor(device=DEVICE, model_name=config.MODEL_NAME)
     embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[test_query]) # returns [batch_size, tokens, embed_dim]
 
@@ -26,7 +25,7 @@ def main():
     prompt = [
         {
             "type": "text",
-            "text": f"You're given this query: {test_query}."
+            "text": f"You're given this query: {query}."
                     f"Use the data provided in `images` to give a correct and consice answer with sources supplemented."
                     f"Use the knowledge provided from the metadata context: {result}, and your own knowledge."
         }
@@ -52,8 +51,8 @@ def main():
         input= prompt
     )
 
-    print(interaction.output_text)
+    return interaction.output_text
     
 if __name__ == "__main__": 
     load_dotenv() # loads env vars
-    main() 
+    query() 
