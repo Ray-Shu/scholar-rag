@@ -2,15 +2,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, BackgroundTasks
+from fastapi import FastAPI
+from .routers import upload
 
-import uuid
 
-import scholar_rag.core.backend_storing as backend_storing
 import scholar_rag.core.utils.vlm_utils as vlm_utils
 from scholar_rag import config 
 
 # lifespan context manager 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Loading Colqwen model into GPU.")
     device = vlm_utils.get_device()
@@ -33,32 +33,8 @@ async def lifespan(app: FastAPI):
     app.state.processor = None 
 
 app = FastAPI(lifespan=lifespan) 
+app.include_router(upload.router)
 
 @app.get("/")
 async def root():
     return {"message": "hello world"}
-
-@app.post("/upload")
-async def upload(files: list[UploadFile], background_task: BackgroundTasks):
-    task_id = str(uuid.uuid4()) 
-    app.state.progress[task_id] = {"status": "processing", "progress": 0.0}
-
-    file_list = [(file.file.read(), file.filename) for file in files]
-    background_task.add_task(
-        backend_storing.store_and_embed, 
-        file_list,
-        app.state.model,
-        app.state.processor,
-        task_id,
-        app.state.progress
-    )
-
-    return {
-            "message": f"{len(files)} are processing in the background",
-            "task_id": task_id
-        }
-
-@app.get("/status/{task_id}")
-async def get_file_upload_status(task_id: str):
-    return app.state.progress.get(task_id, {"status": "not_found", "progress": 0.0})
-

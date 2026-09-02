@@ -36,7 +36,7 @@ def upload(uploader):
                 # check for connection to backend 
                 try: 
                     status_result = requests.get(
-                        f"http://localhost:8000/status/{task_id}",
+                        f"http://localhost:8000/upload/status/{task_id}",
                         timeout=5
                         )
                 except requests.RequestException as e: 
