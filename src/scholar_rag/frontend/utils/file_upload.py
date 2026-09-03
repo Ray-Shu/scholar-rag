@@ -9,7 +9,7 @@ def upload(uploader):
     if uploader:
         try: 
             response = requests.post(
-                "http://localhost:8000/upload",
+                "http://localhost:8000/upload/",
                 files= [("files", (file.name, file.getvalue(), "application/pdf")) for file in uploader]
             )
         except requests.RequestException as e:

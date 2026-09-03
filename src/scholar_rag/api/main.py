@@ -4,6 +4,7 @@ load_dotenv()
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from .routers import upload
+from .routers import query
 
 
 import scholar_rag.core.utils.vlm_utils as vlm_utils
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan) 
 app.include_router(upload.router)
+app.include_router(query.router)
 
 @app.get("/")
 async def root():

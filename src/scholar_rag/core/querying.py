@@ -11,11 +11,10 @@ from google.cloud.storage import Client
 
 DEVICE = vlm_utils.get_device()
 
-def query(query:str): 
+def query(query:str, model, processor): 
     storage_client = Client() 
     bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
     
-    model, processor = vlm_utils.create_colqwen_model_and_processor(device=DEVICE, model_name=config.MODEL_NAME)
     embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[test_query]) # returns [batch_size, tokens, embed_dim]
 
     client = qdrant_utils.get_client()
