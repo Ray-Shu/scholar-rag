@@ -10,9 +10,17 @@ After looking into text-chunking strategies, I noticed two things:
 1. They can't parse mathematical formulations well.
 2. It requires more complexity to render images and graphs in files. 
 
-And so I decided to look into other methods and found VLMs, specifically the ColPali paper.
+So I decided to look into other methods and found VLMs, specifically the ColPali paper. Upon experimenting with math-heavy papers, I noticed that responses don't make many (if any) mistakes.
 
 ---
 ### Implementation
 
 The application uses FastAPI as the backend, and Streamlit as the frontend. Qdrant Cloud is used to store vector embeddings, and Google Cloud Storage is used to store the uploaded papers.
+
+---
+### To-Dos
+
+- [ ] Add database
+- [ ] Setup CI/CD Pipeline
+- [ ] Setup Docker
+- [ ] Host on Google Cloud Run 
