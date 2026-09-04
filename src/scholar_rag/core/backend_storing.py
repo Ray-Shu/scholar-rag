@@ -126,7 +126,7 @@ def store_and_embed(files: list[tuple[bytes, str]], model, processor, task_id:st
                 progress_dict[task_id]["progress"] = percent_processed
 
 
-        if len(image_batch) >= 0: 
+        if len(image_batch) > 0: 
             batch_and_store_embeddings(qdrant_client, model, processor, image_batch, metadata_batch)
 
         progress_dict[task_id]["status"] = "completed"

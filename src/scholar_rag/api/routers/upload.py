@@ -18,7 +18,7 @@ async def upload(
     task_id = str(uuid.uuid4()) 
     progress[task_id] = {"status": "processing", "progress": 0.0}
 
-    file_list = [(file.file.read(), file.filename) for file in files]
+    file_list = [(await file.read(), file.filename) for file in files]
     background_task.add_task(
         backend_storing.store_and_embed, 
         file_list,

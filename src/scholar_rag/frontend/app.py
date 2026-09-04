@@ -17,8 +17,8 @@ with left_column:
             messages.add_message(role="user", content=prompt)
             agent_reply = query.query_agent(query=prompt)
 
-        if agent_reply: 
-            messages.add_message(role="assistant", content=agent_reply)
+            if agent_reply: 
+                messages.add_message(role="assistant", content=agent_reply)
 
 with right_column: 
     with st.popover("Upload PDF"):

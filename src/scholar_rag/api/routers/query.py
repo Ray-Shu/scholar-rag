@@ -25,6 +25,7 @@ async def query(
         payload.query, 
         model, 
         processor,
+        task_id,
         query_results
     )
   
@@ -35,4 +36,4 @@ async def query(
 
 @router.get("/status/{task_id}")
 async def get_agent_response(task_id: str, query_results = Depends(get_query_results)):
-    return query_results.get(task_id, {"status": "failed", "output": ""})
+    return query_results.get(task_id, {"status": "not_found", "output": ""})

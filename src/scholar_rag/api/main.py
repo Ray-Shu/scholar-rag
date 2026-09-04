@@ -2,10 +2,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from .routers import upload
 from .routers import query
 
+import logging
 
 import scholar_rag.core.utils.vlm_utils as vlm_utils
 from scholar_rag import config 
@@ -36,7 +38,16 @@ async def lifespan(app: FastAPI):
     app.state.model = None 
     app.state.processor = None 
 
-app = FastAPI(lifespan=lifespan) 
+app = FastAPI(lifespan=lifespan)
+
+@app.exception_handler(Exception)
+async def unhandled_exception(request: Request, exc: Exception):
+    logging.exception(f"Error on {request.url.path}")
+    return JSONResponse(
+        status_code = 500,
+        content = {"detail": "Internal server error"}
+    )
+
 app.include_router(upload.router)
 app.include_router(query.router)
 

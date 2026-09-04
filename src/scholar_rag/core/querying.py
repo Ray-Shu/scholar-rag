@@ -11,48 +11,52 @@ from google.cloud.storage import Client
 
 DEVICE = vlm_utils.get_device()
 
-def query(query:str, model, processor, query_results): 
-    storage_client = Client() 
-    bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
+def query(query:str, model, processor, task_id, query_results): 
+    try:
+        storage_client = Client() 
+        bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
 
-    embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[query]) # returns [batch_size, tokens, embed_dim]
+        embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[query]) # returns [batch_size, tokens, embed_dim]
 
-    client = qdrant_utils.get_client()
-    result = qdrant_utils.query(client=client, query=embeddings[0], collection_name=config.COLLECTION_NAME)
+        client = qdrant_utils.get_client()
+        result = qdrant_utils.query(client=client, query=embeddings[0], collection_name=config.COLLECTION_NAME)
 
-    # create prompt
-    prompt = [
-        {
-            "type": "text",
-            "text": f"You're given this query: {query}."
-                    f"Use the data provided in `images` to give a correct and consice answer with sources supplemented."
-                    f"Use the knowledge provided from the metadata context: {result}, and your own knowledge."
-        }
-    ]
-
-    for i in range(len(result.points)): 
-        relative_image_key = result.points[i].payload["relative_image_key"]
-        content = gcs_utils.download_blob_into_memory(bucket, blob_name=relative_image_key)
-
-        prompt.append( 
-            {  
-                "type": "image", 
-                # api expects base64 but needs to serializable so use ascii decode to become string. 
-                "data": base64.b64encode(content).decode("ascii"),
-                "mime_type": "image/webp"  # MIME type: multipurpose internet mail extension
-            
+        # create prompt
+        prompt = [
+            {
+                "type": "text",
+                "text": f"You're given this query: {query}."
+                        f"Use the data provided in `images` to give a correct and consice answer with sources supplemented."
+                        f"Use the knowledge provided from the metadata context: {result}, and your own knowledge."
             }
+        ]
+
+        for i in range(len(result.points)): 
+            relative_image_key = result.points[i].payload["relative_image_key"]
+            content = gcs_utils.download_blob_into_memory(bucket, blob_name=relative_image_key)
+
+            prompt.append( 
+                {  
+                    "type": "image", 
+                    # api expects base64 but needs to serializable so use ascii decode to become string. 
+                    "data": base64.b64encode(content).decode("ascii"),
+                    "mime_type": "image/webp"  # MIME type: multipurpose internet mail extension
+                
+                }
+            )
+        
+        gemini_client = genai.Client()
+        interaction = gemini_client.interactions.create(
+            model=config.GENERATION_MODEL,
+            input= prompt
         )
-    
-    gemini_client = genai.Client()
-    interaction = gemini_client.interactions.create(
-        model=config.GENERATION_MODEL,
-        input= prompt
-    )
 
-    query_results["status"] = "complete"
-    query_results["output"] = interaction.output_text
+        query_results[task_id]["status"] = "complete"
+        query_results[task_id]["output"] = interaction.output_text
 
+    except Exception as e: 
+        query_results[task_id]["status"] = "failed"
+        query_results[task_id]["error"] = e
     
 if __name__ == "__main__": 
     load_dotenv() # loads env vars
