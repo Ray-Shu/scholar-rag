@@ -12,10 +12,13 @@ with left_column:
     prompt = st.chat_input("Enter a message.")
 
     if prompt: 
-        res = query.query(prompt)
+        res = query.is_query_good(prompt)
         if res: 
             messages.add_message(role="user", content=prompt)
+            agent_reply = query.query_agent(query=prompt)
 
+        if agent_reply: 
+            messages.add_message(role="assistant", content=agent_reply)
 
 with right_column: 
     with st.popover("Upload PDF"):

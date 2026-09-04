@@ -11,11 +11,11 @@ from google.cloud.storage import Client
 
 DEVICE = vlm_utils.get_device()
 
-def query(query:str, model, processor): 
+def query(query:str, model, processor, query_results): 
     storage_client = Client() 
     bucket = storage_client.bucket(bucket_name=config.GCS_BUCKET_NAME)
-    
-    embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[test_query]) # returns [batch_size, tokens, embed_dim]
+
+    embeddings = vlm_utils.embed_input(model=model, processor=processor, input_type="query", input=[query]) # returns [batch_size, tokens, embed_dim]
 
     client = qdrant_utils.get_client()
     result = qdrant_utils.query(client=client, query=embeddings[0], collection_name=config.COLLECTION_NAME)
@@ -50,7 +50,9 @@ def query(query:str, model, processor):
         input= prompt
     )
 
-    return interaction.output_text
+    query_results["status"] = "complete"
+    query_results["output"] = interaction.output_text
+
     
 if __name__ == "__main__": 
     load_dotenv() # loads env vars

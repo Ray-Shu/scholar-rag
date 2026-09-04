@@ -8,3 +8,6 @@ def get_processor(request: Request):
 
 def get_progress(request: Request) -> dict:
     return request.app.state.progress
+
+def get_query_results(request: Request) -> dict: 
+    return request.app.state.query_results

@@ -22,6 +22,9 @@ async def lifespan(app: FastAPI):
     app.state.processor = processor 
     print("Model loaded successfully.")
 
+    # query storage (in RAM, no DB)
+    app.state.query_results = {}
+
     # progress bars for pdf downloads (in-memory RAM)
     app.state.progress = {}
 
@@ -37,6 +40,3 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(upload.router)
 app.include_router(query.router)
 
-@app.get("/")
-async def root():
-    return {"message": "hello world"}

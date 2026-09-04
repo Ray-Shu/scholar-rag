@@ -10,7 +10,8 @@ def upload(uploader):
         try: 
             response = requests.post(
                 "http://localhost:8000/upload/",
-                files= [("files", (file.name, file.getvalue(), "application/pdf")) for file in uploader]
+                files= [("files", (file.name, file.getvalue(), "application/pdf")) for file in uploader],
+                timeout = 10
             )
         except requests.RequestException as e:
             st.error(f"Request Error: {e}") 
@@ -37,7 +38,7 @@ def upload(uploader):
                 try: 
                     status_result = requests.get(
                         f"http://localhost:8000/upload/status/{task_id}",
-                        timeout=5
+                        timeout = 10
                         )
                 except requests.RequestException as e: 
                     st.error(f"Failed to connect to backend: {e}")
