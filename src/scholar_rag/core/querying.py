@@ -1,4 +1,5 @@
 import base64
+import logging
 from dotenv import load_dotenv 
 
 import scholar_rag.core.utils.vlm_utils as vlm_utils 
@@ -55,8 +56,9 @@ def query(query:str, model, processor, task_id, query_results):
         query_results[task_id]["output"] = interaction.output_text
 
     except Exception as e: 
+        logging.exception(f"Query task {task_id} failed")
         query_results[task_id]["status"] = "failed"
-        query_results[task_id]["error"] = e
+        query_results[task_id]["error"] = f"{type(e).__name__}: {e}"
     
 if __name__ == "__main__": 
     load_dotenv() # loads env vars

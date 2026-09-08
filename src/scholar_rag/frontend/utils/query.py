@@ -2,6 +2,8 @@ import streamlit as st
 import requests 
 import time
 
+from scholar_rag.config import API_URL
+
 MAX_WAIT_SECONDS = 300 
 POLLING_INTERVAL = 1.5
 
@@ -18,7 +20,7 @@ def is_query_good(query:str):
 def query_agent(query:str):
     try:
         response = requests.post(
-            "http://localhost:8000/query/", 
+            f"{API_URL}/query/", 
             json={"query": query},
             timeout=10
         )
@@ -41,7 +43,7 @@ def query_agent(query:str):
 
                 try: 
                     status_result = requests.get(
-                        f"http://localhost:8000/query/status/{task_id}",
+                        f"{API_URL}/query/status/{task_id}",
                         timeout = 10
                     )
                 except requests.RequestException as e: 

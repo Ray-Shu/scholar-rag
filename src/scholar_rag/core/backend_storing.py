@@ -13,6 +13,7 @@ from scholar_rag import config
 import pymupdf
 from PIL import Image
 import uuid 
+import logging
 
 BATCH_SIZE = 8
 DEVICE = vlm_utils.get_device()
@@ -134,8 +135,10 @@ def store_and_embed(files: list[tuple[bytes, str]], model, processor, task_id:st
         gcs_utils.upload_many_blob_from_memory(file_blob_pairs=file_blob_pairs)
 
     except Exception as e: 
+        logging.exception(f"Storing papers failed")
         progress_dict[task_id]["status"] = "failed"
         progress_dict[task_id]["progress"] = 0.0
+        progress_dict[task_id]["error"] = f"{type(e).__name__}: {e}"
                 
 
 if __name__ == "__main__": 

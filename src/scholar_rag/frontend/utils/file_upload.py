@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import time
 
+from scholar_rag.config import API_URL
+
 MAX_WAIT_SECONDS = 300 
 POLLING_INTERVAL = 1.5
 
@@ -9,7 +11,7 @@ def upload(uploader):
     if uploader:
         try: 
             response = requests.post(
-                "http://localhost:8000/upload/",
+                f"{API_URL}/upload/",
                 files= [("files", (file.name, file.getvalue(), "application/pdf")) for file in uploader],
                 timeout = 10
             )
@@ -37,7 +39,7 @@ def upload(uploader):
                 # check for connection to backend 
                 try: 
                     status_result = requests.get(
-                        f"http://localhost:8000/upload/status/{task_id}",
+                        f"{API_URL}/upload/status/{task_id}",
                         timeout = 10
                         )
                 except requests.RequestException as e: 

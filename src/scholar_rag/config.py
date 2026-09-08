@@ -1,6 +1,9 @@
+import os
 from pathlib import Path
 from dotenv import load_dotenv 
 load_dotenv()
+
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 PAPERS_FOLDER = Path(__file__).resolve().parent / "papers"
 COLLECTION_NAME = "papers"

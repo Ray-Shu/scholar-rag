@@ -1,0 +1,38 @@
+# BUILD STAGE 
+FROM python:3.11-slim AS build
+COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /uvx /bin/
+WORKDIR /app
+
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+ENV UV_PYTHON_DOWNLOADS=0
+
+#install depd first 
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-install-project --no-dev --extra backend
+
+#copy app code and install project
+COPY src/ ./src/
+RUN uv sync --locked --no-dev --extra backend
+
+# PROD STAGE 
+FROM python:3.11-slim
+WORKDIR /app
+
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+COPY --from=build --chown=appuser:appuser /app/.venv /app/.venv
+COPY --from=build --chown=appuser:appuser /app/src /app/src
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/hf
+ENV HF_HUB_OFFLINE=1
+
+ARG MODEL_NAME=vidore/colqwen2-v1.0-hf
+RUN HF_HUB_OFFLINE=0 python -c "\
+from huggingface_hub import snapshot_download; \
+snapshot_download('${MODEL_NAME}')"
+
+CMD exec uvicorn scholar_rag.api.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips "*"
