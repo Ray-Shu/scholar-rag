@@ -23,7 +23,5 @@ The application uses FastAPI as the backend, and Streamlit as the frontend. Qdra
 ### To-Dos
 
 - [ ] Add database
-- [ ] Setup CI/CD Pipeline
-- [ ] Setup tests
-- [ ] Setup Docker
+- [X] Setup Docker
 - [ ] Host on Google Cloud Run 
